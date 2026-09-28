@@ -1,5 +1,3 @@
-
-
 import org.openrndr.math.Vector2
 import kotlin.math.sqrt
 import kotlin.random.Random
@@ -359,6 +357,327 @@ fun generatePoints(
 }
 
 
+// --------------------------------------------------
+// GÉNÉRATION DE SITES "ORGANIQUE" (champ de bruit)
+// --------------------------------------------------
+//
+// minimumDistanceAt() ci-dessus ne fait varier la taille désirée
+// des cellules qu'en fonction de la distance au centre (un dégradé
+// radial). Résultat : les cellules restent assez uniformes en
+// taille à distance égale du centre, ce qui donne un pavage en
+// "nid d'abeille" plutôt régulier.
+//
+// noiseField() introduit à la place un champ de bruit spatial
+// (somme de sinus décorrélés, dans le même esprit que
+// Deformation.kt) : la taille désirée varie alors de façon
+// irrégulière sur toute l'image, sans lien avec la position
+// relative au centre. C'est ce qui permet d'obtenir un vrai
+// mélange de grandes et petites pièces de verre, comme sur un
+// vitrail réel.
+
+fun noiseField(
+    x: Double,
+    y: Double
+): Double {
+
+    return 0.5 +
+            0.25 * kotlin.math.sin(
+        x * 0.010 +
+                y * 0.013
+    ) +
+            0.25 * kotlin.math.sin(
+        x * 0.004 -
+                y * 0.007
+    )
+}
+
+fun organicMinimumDistanceAt(
+    point: Vector2,
+    baseDistance: Double,
+    sizeVariation: Double
+): Double {
+
+    val noise = noiseField(point.x, point.y)
+
+    // noise ∈ [0, 1] → taille locale entre 0.4x et (0.4 + 1.8·sizeVariation)x
+    val factor = 0.4 + sizeVariation * 1.8 * noise
+
+    return baseDistance * factor
+}
+
+fun generateOrganicPoints(
+    numberOfSites: Int,
+    width: Double,
+    height: Double,
+    random: Random,
+    baseDistance: Double,
+    sizeVariation: Double
+): List<Vector2> {
+
+    val points = mutableListOf<Vector2>()
+    val pointDistances = mutableListOf<Double>()
+
+    val maxAttempts = 200_000
+    var attempts = 0
+
+    while (
+        points.size < numberOfSites &&
+        attempts < maxAttempts
+    ) {
+
+        attempts++
+
+        val candidate = Vector2(
+            random.nextDouble(0.0, width),
+            random.nextDouble(0.0, height)
+        )
+
+        val candidateDistance =
+            organicMinimumDistanceAt(
+                candidate,
+                baseDistance,
+                sizeVariation
+            )
+
+        var valid = true
+
+        for (i in points.indices) {
+
+            val point = points[i]
+
+            val dx = candidate.x - point.x
+            val dy = candidate.y - point.y
+
+            val distanceSquared = dx * dx + dy * dy
+
+            val existingDistance = pointDistances[i]
+
+            val requiredDistance =
+                (candidateDistance + existingDistance) / 2.0
+
+            if (distanceSquared < requiredDistance * requiredDistance) {
+                valid = false
+                break
+            }
+        }
+
+        if (valid) {
+            points.add(candidate)
+            pointDistances.add(candidateDistance)
+        }
+    }
+
+    return points
+}
+
+
+// --------------------------------------------------
+// COURBES DIRECTRICES + "CLÔTURE" DE SITES
+// --------------------------------------------------
+//
+// Technique classique pour forcer un diagramme de Voronoï à faire
+// passer une frontière de cellule le long d'une courbe donnée :
+// on sème deux rangées de points, une de chaque côté de la courbe,
+// à faible décalage perpendiculaire. La bissectrice entre deux
+// points d'une même paire est alors localement tangente à la
+// courbe, et l'enchaînement des paires successives approxime la
+// courbe sur toute sa longueur.
+//
+// Deux réglages critiques (validés empiriquement en Python avant
+// ce portage) :
+// - l'espacement entre paires doit être PROCHE de la taille de
+//   cellule ambiante (baseDistance), sinon la clôture crée sa
+//   propre chaîne de fines échardes au lieu d'une simple frontière ;
+// - le décalage perpendiculaire doit rester PETIT (une fraction de
+//   baseDistance), sinon la clôture engendre un ruban de cellules
+//   fines qui lui est propre, très visible et peu naturel.
+
+fun generateGuideCurves(
+    width: Double,
+    height: Double,
+    numberOfCurves: Int,
+    random: Random
+): List<List<Vector2>> {
+
+    val curves = mutableListOf<List<Vector2>>()
+
+    repeat(numberOfCurves) {
+
+        val vertical = random.nextBoolean()
+
+        val baseOffset = random.nextDouble(0.2, 0.8)
+        val amplitude = (if (vertical) width else height) * random.nextDouble(0.10, 0.25)
+        val frequency = random.nextDouble(1.2, 2.6)
+        val phase = random.nextDouble(0.0, 2.0 * Math.PI)
+
+        val samples = 60
+        val points = mutableListOf<Vector2>()
+
+        for (s in 0..samples) {
+
+            val t = s.toDouble() / samples
+
+            val wobble =
+                amplitude * kotlin.math.sin(t * frequency * Math.PI + phase) +
+                        amplitude * 0.35 * kotlin.math.sin(t * frequency * 2.3 * Math.PI + phase * 1.7)
+
+            val point = if (vertical) {
+                Vector2(
+                    (baseOffset * width + wobble).coerceIn(0.0, width),
+                    t * height
+                )
+            } else {
+                Vector2(
+                    t * width,
+                    (baseOffset * height + wobble).coerceIn(0.0, height)
+                )
+            }
+
+            points.add(point)
+        }
+
+        curves.add(points)
+    }
+
+    return curves
+}
+
+fun curveFencePoints(
+    curve: List<Vector2>,
+    fenceSpacing: Double,
+    offsetDistance: Double
+): List<Vector2> {
+
+    if (curve.size < 2) {
+        return emptyList()
+    }
+
+    val fencePoints = mutableListOf<Vector2>()
+
+    var accumulated = 0.0
+    var nextSampleAt = 0.0
+
+    for (i in 0 until curve.size - 1) {
+
+        val a = curve[i]
+        val b = curve[i + 1]
+
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+
+        val segmentLength = sqrt(dx * dx + dy * dy)
+
+        if (segmentLength == 0.0) {
+            continue
+        }
+
+        val normalX = -(dy / segmentLength)
+        val normalY = dx / segmentLength
+
+        while (nextSampleAt <= accumulated + segmentLength) {
+
+            val localT = (nextSampleAt - accumulated) / segmentLength
+
+            val sampleX = a.x + dx * localT
+            val sampleY = a.y + dy * localT
+
+            fencePoints.add(
+                Vector2(
+                    sampleX + normalX * offsetDistance,
+                    sampleY + normalY * offsetDistance
+                )
+            )
+
+            fencePoints.add(
+                Vector2(
+                    sampleX - normalX * offsetDistance,
+                    sampleY - normalY * offsetDistance
+                )
+            )
+
+            nextSampleAt += fenceSpacing
+        }
+
+        accumulated += segmentLength
+    }
+
+    return fencePoints
+}
+
+/**
+ * Variante de generateOrganicPoints() qui part d'un ensemble de
+ * points déjà imposés (seedPoints — typiquement une clôture de
+ * courbes directrices) et complète l'espace restant avec le même
+ * échantillonnage par rejet piloté par bruit spatial.
+ */
+fun generateOrganicPointsWithSeeds(
+    numberOfSites: Int,
+    width: Double,
+    height: Double,
+    random: Random,
+    baseDistance: Double,
+    sizeVariation: Double,
+    seedPoints: List<Vector2>,
+    seedMinDistance: Double
+): List<Vector2> {
+
+    val points = seedPoints.toMutableList()
+    val pointDistances = MutableList(seedPoints.size) { seedMinDistance }
+
+    val maxAttempts = 200_000
+    var attempts = 0
+
+    val targetTotal = seedPoints.size + numberOfSites
+
+    while (
+        points.size < targetTotal &&
+        attempts < maxAttempts
+    ) {
+
+        attempts++
+
+        val candidate = Vector2(
+            random.nextDouble(0.0, width),
+            random.nextDouble(0.0, height)
+        )
+
+        val candidateDistance =
+            organicMinimumDistanceAt(
+                candidate,
+                baseDistance,
+                sizeVariation
+            )
+
+        var valid = true
+
+        for (i in points.indices) {
+
+            val point = points[i]
+
+            val dx = candidate.x - point.x
+            val dy = candidate.y - point.y
+
+            val distanceSquared = dx * dx + dy * dy
+
+            val requiredDistance =
+                (candidateDistance + pointDistances[i]) / 2.0
+
+            if (distanceSquared < requiredDistance * requiredDistance) {
+                valid = false
+                break
+            }
+        }
+
+        if (valid) {
+            points.add(candidate)
+            pointDistances.add(candidateDistance)
+        }
+    }
+
+    return points
+}
+
+
 fun densityAt(
     point: Vector2,
     width: Double,
@@ -480,4 +799,3 @@ fun weightedPolygonCentroid(
         weightedY / totalWeight
     )
 }
-
