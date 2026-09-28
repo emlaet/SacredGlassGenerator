@@ -3,7 +3,6 @@ import org.openrndr.color.ColorRGBa
 import org.openrndr.math.Vector2
 import org.openrndr.draw.*
 import org.openrndr.extensions.Screenshots
-import kotlin.random.Random
 import java.io.File
 
 // --------------------------------------------------
@@ -16,7 +15,10 @@ import java.io.File
 // Palette.kt, Leading.kt, Glass.kt) et de piloter la boucle de
 // rendu OpenRNDR. Les arêtes courbes partagées sont dans
 // EdgeCurves.kt. Les données de palettes (saisons liturgiques)
-// sont dans Palette.kt, après les algorithmes.
+// sont dans Palette.kt, après les algorithmes. La génération et le
+// dessin (renderVitrail) sont dans Renderer.kt : ce fichier construit
+// seulement la "recette" (VitrailConfig) et gère la fenêtre et les
+// touches.
 //
 // Réglage actuel : Composition RadiantCross + Segmentation
 // RadiantCross + Palette aléatoire pondérée (vert, temps ordinaire)
@@ -76,11 +78,9 @@ fun main() = application {
         // ------------------------
 
         val seed = 123
-        // Random(seed) est recréé à chaque appel de renderVitrail() plus
-        // bas, pas gardé ici — indispensable pour que l'aperçu et l'export
-        // haute résolution consomment chacun leur PROPRE séquence de
-        // tirages aléatoires à partir du même seed, et produisent donc
-        // exactement le même motif (juste à une résolution différente).
+        // Random(seed) est recréé à chaque appel de renderVitrail() (voir
+        // Renderer.kt), jamais gardé ici — l'aperçu et l'export produisent
+        // ainsi exactement le même motif.
 
         val numberOfSites = 45
 
@@ -198,41 +198,16 @@ fun main() = application {
         val crossMedallionShades = liturgicalPalette.medallionShades(medallionMode)
 
         // ------------------------
-        // PIPELINE — 5 SYSTÈMES + RENDU
+        // RECETTE — assemblage des 5 systèmes
         // ------------------------
         //
-        // Toute la génération (Composition → Segmentation → Palette →
-        // Plomb → Verre) et le dessin sont regroupés dans cette fonction,
-        // plutôt que calculés une fois au niveau de program{} comme
-        // avant. Nécessaire pour l'export haute résolution : on ne peut
-        // pas se contenter d'agrandir l'image déjà calculée à 768×576
-        // (le plomb, la courbure des arêtes, la taille des cellules sont
-        // tous définis en PIXELS ABSOLUS — les ré-agrandir sans
-        // régénérer la géométrie donnerait un plomb relativement plus
-        // fin, une courbure relativement plus plate, etc. à haute
-        // résolution). À la place, on régénère tout le motif à la
-        // résolution cible avec le MÊME seed (donc le même dessin), et
-        // on multiplie les paramètres en pixels absolus par pixelScale
-        // pour garder les mêmes proportions relatives.
-        //
-        // canvasWidth/canvasHeight : dimensions cibles (aperçu ou export).
-        // pixelScale : rapport entre canvasWidth et la largeur de
-        // référence (768) — 1.0 pour l'aperçu, >1.0 pour un export plus
-        // grand. S'applique à tout ce qui est défini en pixels absolus
-        // (strokeWeight, curvatureAmount) ; tout ce qui est déjà relatif
-        // (ratios, poids, fréquences de bruit du shader en uv 0–1) n'a
-        // besoin d'aucun ajustement et s'adapte de lui-même.
-        fun renderVitrail(
-            targetDrawer: Drawer,
-            canvasWidth: Double,
-            canvasHeight: Double,
-            pixelScale: Double
-        ) {
-
-            val random = Random(seed)
-
-            val scaledStrokeWeight = strokeWeight * pixelScale
-            val scaledCurvatureAmount = curvatureAmount * pixelScale
+        // Tout ce qui définit l'œuvre est réuni dans une seule
+        // VitrailConfig (voir Renderer.kt). renderVitrail() se charge
+        // ensuite de la génération et du dessin, pour l'aperçu comme
+        // pour l'export.
+        val config = VitrailConfig(
+            seed = seed,
+            numberOfSites = numberOfSites,
 
             // Système 1 — Composition
             // Alternatives disponibles : GridCompositionSystem(),
@@ -240,36 +215,22 @@ fun main() = application {
             // CurveGuidedCompositionSystem(numberOfGuideCurves, baseSiteDistance, sizeVariation),
             // RadialCompositionSystem(numberOfRays, numberOfRings, radialJitterRatio, radialJitterRatio),
             // SunburstCompositionSystem(sunburstNumberOfRays, sunburstCoreRadiusRatio, sunburstAngleIrregularity, sunburstMinDivisionsPerRay, sunburstMaxDivisionsPerRay)
-            val compositionSystem: CompositionSystem =
-                RadiantCrossCompositionSystem(
-                    coreRadiusRatio = crossCoreRadiusRatio,
-                    numberOfRays = crossNumberOfRays,
-                    angleIrregularity = crossAngleIrregularity,
-                    minDivisionsPerRay = crossMinDivisionsPerRay,
-                    maxDivisionsPerRay = crossMaxDivisionsPerRay,
-                    lightLengthMinRatio = crossLightLengthMinRatio,
-                    lightLengthMaxRatio = crossLightLengthMaxRatio,
-                    armWindows = crossArmWindows
-                ) // <-- swap ici
-            val guide = compositionSystem.generate(
-                canvasWidth,
-                canvasHeight,
-                numberOfSites,
-                random
-            )
+            compositionSystem = RadiantCrossCompositionSystem(
+                coreRadiusRatio = crossCoreRadiusRatio,
+                numberOfRays = crossNumberOfRays,
+                angleIrregularity = crossAngleIrregularity,
+                minDivisionsPerRay = crossMinDivisionsPerRay,
+                maxDivisionsPerRay = crossMaxDivisionsPerRay,
+                lightLengthMinRatio = crossLightLengthMinRatio,
+                lightLengthMaxRatio = crossLightLengthMaxRatio,
+                armWindows = crossArmWindows
+            ), // <-- swap ici
 
-            // Système 2 — Segmentation
+            // Système 2 — Segmentation (à échanger avec la composition)
             // Alternatives disponibles : GridSegmentationSystem(),
             // VoronoiSegmentationSystem(relaxationIterations),
             // RadialSegmentationSystem(), SunburstSegmentationSystem()
-            val segmentationSystem: SegmentationSystem =
-                RadiantCrossSegmentationSystem() // <-- swap ici
-            val cells = segmentationSystem.segment(
-                guide,
-                canvasWidth,
-                canvasHeight,
-                random
-            )
+            segmentationSystem = RadiantCrossSegmentationSystem(), // <-- swap ici
 
             // Système 3 — Palette
             // Les rayons de lumière n'ont pas besoin de regroupement
@@ -277,34 +238,19 @@ fun main() = application {
             // distinctes, un tirage indépendant pondéré suffit. Voir
             // Palette.kt pour le détail des essais précédents pertinents
             // pour les styles à cellules petites et nombreuses (Voronoï).
-            val paletteSystem: PaletteSystem =
-                WeightedRandomPaletteSystem(paletteFamilies) // <-- swap ici
-            val cellColors = paletteSystem.assignColors(cells, random).toMutableList()
-
-            // Post-traitement SPÉCIFIQUE à la croix rayonnante : bras
-            // forcés en blanc cassé, médaillon selon medallionMode (voir
-            // applyRadiantCrossColors dans Palette.kt). ⚠ Consomme des
-            // tirages de random : garder cet appel à cet endroit.
-            if (guide is CompositionGuide.RadiantCross) {
-                applyRadiantCrossColors(
-                    guide = guide,
-                    cells = cells,
-                    cellColors = cellColors,
-                    armShades = crossArmShades,
-                    medallionShades = crossMedallionShades,
-                    random = random
-                )
-            }
+            paletteSystem = WeightedRandomPaletteSystem(paletteFamilies), // <-- swap ici
+            crossArmShades = crossArmShades,
+            crossMedallionShades = crossMedallionShades,
 
             // Système 4 — Plomb
-            // Retour au trait noir simple, sans reflet — préférence
-            // confirmée après test du reflet décalé (jugé moins bon que
-            // le simple trait noir).
-            val leadSystem: LeadSystem = BasicLeadSystem()
-            val leadStyle = LeadStyle(
-                width = scaledStrokeWeight,
+            // Trait noir simple, sans reflet — préférence confirmée
+            // après test du reflet décalé (jugé moins bon que le simple
+            // trait noir).
+            leadSystem = BasicLeadSystem(),
+            leadStyle = LeadStyle(
+                width = strokeWeight,
                 color = strokeColor
-            )
+            ),
 
             // Système 5 — Verre
             // Cinquième réglage (voir l'en-tête de Glass.kt pour
@@ -321,8 +267,8 @@ fun main() = application {
             // seulement les formes allongées) : 62% de saturation avec
             // une vraie texture visible, sans dégrader le rendu des
             // quartiers de rayon.
-            val glassSystem: GlassSystem = ProceduralGlassSystem() // <-- swap ici
-            val glassStyle = GlassStyle(
+            glassSystem = ProceduralGlassSystem(), // <-- swap ici
+            glassStyle = GlassStyle(
                 textureStrength = 0.26,
                 streakStrength = 0.28,
                 streakAngle = 0.6,
@@ -330,54 +276,11 @@ fun main() = application {
                 lightDirection = lightDirection,
                 globalLightStrength = 0.18,
                 opalescenceStrength = 0.10
-            )
-            val glassShadeStyle = glassSystem.createShadeStyle(glassStyle)
-            val materialVariation = glassSystem.assignMaterialVariation(cells.size, random)
+            ),
 
-            val edgeCurveCache = mutableMapOf<String, EdgeCurve>()
-
-            // Remplissage (Palette + Verre)
-            cells.forEachIndexed { index, cell ->
-
-                if (cell.size < 3) {
-                    return@forEachIndexed
-                }
-
-                val contour = createCurvedContour(cell, edgeCurveCache, scaledCurvatureAmount)
-
-                val cellCenter = polygonCentroid(cell)
-                val bounds = contour.bounds
-
-                // Position normalisée DANS la cellule (déjà existant) :
-                // pilote la vignette locale (plus clair au centre de
-                // la pièce, plus sombre vers ses bords).
-                val normalizedCellCenter = Vector2(
-                    (cellCenter.x - bounds.corner.x) / bounds.width,
-                    (cellCenter.y - bounds.corner.y) / bounds.height
-                )
-
-                // Position normalisée DANS TOUT LE CANEVAS (nouveau) :
-                // pilote le dégradé de lumière globale cohérent sur
-                // l'ensemble du tableau (voir Glass.kt, section 4).
-                val canvasPosition = Vector2(
-                    cellCenter.x / canvasWidth,
-                    cellCenter.y / canvasHeight
-                )
-
-                targetDrawer.fill = cellColors[index]
-                targetDrawer.stroke = null
-
-                glassShadeStyle.parameter("cellCenter", normalizedCellCenter)
-                glassShadeStyle.parameter("canvasPosition", canvasPosition)
-                glassShadeStyle.parameter("opalescence", materialVariation[index])
-                targetDrawer.shadeStyle = glassShadeStyle
-
-                targetDrawer.contour(contour)
-            }
-
-            // Bordures (Plomb)
-            leadSystem.draw(targetDrawer, cells, edgeCurveCache, scaledCurvatureAmount, leadStyle)
-        }
+            curvatureAmount = curvatureAmount,
+            backgroundColor = backgroundColor
+        )
 
         // ------------------------
         // EXPORT
@@ -425,6 +328,7 @@ fun main() = application {
                     drawer.clear(ColorRGBa.TRANSPARENT)
                     renderVitrail(
                         drawer,
+                        config,
                         exportWidth.toDouble(),
                         exportHeight.toDouble(),
                         exportPixelScale
@@ -434,7 +338,7 @@ fun main() = application {
                 val exportsFolder = File("exports").absoluteFile
                 exportsFolder.mkdirs()
 
-                val fileName = "vitrail-seed$seed-${System.currentTimeMillis()}.png"
+                val fileName = "vitrail-seed${config.seed}-${System.currentTimeMillis()}.png"
                 val outputFile = exportsFolder.resolve(fileName)
                 // async = false : on attend la fin de l'écriture avant de
                 // continuer, pour pouvoir libérer exportTarget juste après
@@ -452,8 +356,8 @@ fun main() = application {
         // ------------------------
 
         extend {
-            drawer.clear(backgroundColor)
-            renderVitrail(drawer, width.toDouble(), height.toDouble(), 1.0)
+            drawer.clear(config.backgroundColor)
+            renderVitrail(drawer, config, width.toDouble(), height.toDouble(), 1.0)
         }
     }
 }
