@@ -19,10 +19,21 @@ import org.openrndr.extensions.Screenshots
 // seulement la "recette" (VitrailConfig) et gère la fenêtre et les
 // touches. L'export haute résolution est dans Export.kt.
 //
-// Réglage actuel : Composition RadiantCross + Segmentation
-// RadiantCross + Palette aléatoire pondérée (vert, temps ordinaire)
+// Réglage actuel : Composition RadiantAngel + Segmentation
+// RadiantAngel + Palette aléatoire pondérée (vert, temps ordinaire)
 // + Basic (plomb noir simple) + Procedural (avec lumière globale +
-// opalescence). Même moteur que Sunburst (rayons indépendants depuis
+// opalescence), variante « robe liturgique » (sans rayons de lumière,
+// robe aux couleurs de la palette — voir angelRobeVariant plus bas).
+// L'ange rayonnant est dérivé de la croix rayonnante
+// décrite ci-dessous, mais ses rayons partent de la POITRINE (petit
+// médaillon sombre) : vers le bas la robe, vers le haut le cou et la
+// tête ronde entourée d'un nimbe doré, de part et d'autre deux ailes
+// levées découpées en plumes, et quelques rayons de lumière entre les
+// ailes et la robe (voir RadiantAngelCompositionSystem dans
+// Composition.kt pour tous les réglages de forme).
+//
+// Croix rayonnante (réglage précédent) : Composition RadiantCross +
+// Segmentation RadiantCross. Même moteur que Sunburst (rayons indépendants depuis
 // un centre), mais certains rayons sont désignés comme les bras
 // d'une croix latine (plus longs, forcés en blanc cassé) tandis que
 // les autres jouent le rôle de rayons de lumière plus courts et
@@ -47,7 +58,12 @@ import org.openrndr.extensions.Screenshots
 //   - SunburstCompositionSystem(...)   + SunburstSegmentationSystem()
 //     (plein cadre, sans croix — voir les paramètres sunburst* encore
 //     présents plus bas, non utilisés tant que RadiantCross est actif)
-//   - RadiantCrossCompositionSystem(...) + RadiantCrossSegmentationSystem()  [réglage actuel]
+//   - RadiantCrossCompositionSystem(...) + RadiantCrossSegmentationSystem()
+//     (croix rayonnante — voir radiantCrossComposition plus bas)
+//   - RadiantAngelCompositionSystem()  + RadiantAngelSegmentationSystem()
+//     (ange entouré de rayons colorés)
+//   - angelRobeVariant (voir plus bas) + RadiantAngelSegmentationSystem()  [réglage actuel]
+//     (ange sans rayons, robe aux couleurs de la saison)
 //
 //   Palette (algorithme de répartition) :
 //   - RandomPaletteSystem(flatColors)                 [résultat "poivre et sel" sur cellules petites/nombreuses, évité]
@@ -185,12 +201,15 @@ fun main() = application {
         //   LiturgicalPalettes.NOIRE     — noir, funérailles (facultatif)
         //   LiturgicalPalettes.ROSE      — rose, Gaudete/Laetare
         //   LiturgicalPalettes.MARIAL    — bleu marial (privilège régional, PAS une des six couleurs universelles)
-        val liturgicalPalette = LiturgicalPalettes.ORDINAIRE
+        val liturgicalPalette = LiturgicalPalettes.MARIAL
 
         // <-- swap ici : teinte du MÉDAILLON, indépendante de la saison
         // (voir MedallionMode dans Palette.kt) :
         //   MedallionMode.HOST     — toujours crème, lecture "hostie" [réglage actuel]
         //   MedallionMode.SEASONAL — cœur sombre propre à la saison active
+        // (Croix rayonnante uniquement : l'ange a toujours une poitrine
+        // sombre de la saison et une tête claire — voir angelChestShades
+        // dans la recette ci-dessous.)
         val medallionMode = MedallionMode.HOST
 
         val paletteFamilies = liturgicalPalette.families
@@ -204,6 +223,45 @@ fun main() = application {
         // VitrailConfig (voir Renderer.kt). renderVitrail() se charge
         // ensuite de la génération et du dessin, pour l'aperçu comme
         // pour l'export.
+        // Croix rayonnante, prête à l'emploi : pour y revenir, remplacer
+        // dans la recette ci-dessous RadiantAngelCompositionSystem() par
+        // radiantCrossComposition, et RadiantAngelSegmentationSystem()
+        // par RadiantCrossSegmentationSystem().
+        val radiantCrossComposition = RadiantCrossCompositionSystem(
+            coreRadiusRatio = crossCoreRadiusRatio,
+            numberOfRays = crossNumberOfRays,
+            angleIrregularity = crossAngleIrregularity,
+            minDivisionsPerRay = crossMinDivisionsPerRay,
+            maxDivisionsPerRay = crossMaxDivisionsPerRay,
+            lightLengthMinRatio = crossLightLengthMinRatio,
+            lightLengthMaxRatio = crossLightLengthMaxRatio,
+            armWindows = crossArmWindows
+        )
+
+        // Ange rayonnant, variante « robe liturgique » : pas de rayons de
+        // lumière, la robe (plus large et plus finement découpée) porte
+        // les couleurs de la palette liturgique active, et les ailes
+        // sont un peu plus ouvertes. Pour revenir à l'ange entouré de
+        // rayons colorés, remplacer dans la recette ci-dessous
+        // angelRobeVariant par RadiantAngelCompositionSystem().
+        val angelRobeVariant = RadiantAngelCompositionSystem(
+            showLightRays = false,
+            robeUsesPalette = true,
+            bodyHalfWidthDegrees = 26.0,
+            bodyRayCount = 6,
+            bodyMinDivisionsPerRay = 3,
+            bodyMaxDivisionsPerRay = 4,
+            wingCenterDegrees = 196.0,
+            wingHalfWidthDegrees = 38.0,
+            // Ailes raccourcies par rapport au premier réglage de la
+            // variante (1.05 / 0.50 : envergure ~550 px à l'aperçu),
+            // pour équilibrer la robe : 0.80 / 0.38 donne ~440 px
+            // (−20 %). Autres essais comparés : 0.95 / 0.46 (−8 %,
+            // différence à peine visible), 0.72 / 0.34 (−27 %).
+            wingLowerLengthRatio = 0.38,
+            wingPeakLengthRatio = 0.80
+        )
+
         val config = VitrailConfig(
             seed = seed,
             numberOfSites = numberOfSites,
@@ -214,22 +272,16 @@ fun main() = application {
             // CurveGuidedCompositionSystem(numberOfGuideCurves, baseSiteDistance, sizeVariation),
             // RadialCompositionSystem(numberOfRays, numberOfRings, radialJitterRatio, radialJitterRatio),
             // SunburstCompositionSystem(sunburstNumberOfRays, sunburstCoreRadiusRatio, sunburstAngleIrregularity, sunburstMinDivisionsPerRay, sunburstMaxDivisionsPerRay)
-            compositionSystem = RadiantCrossCompositionSystem(
-                coreRadiusRatio = crossCoreRadiusRatio,
-                numberOfRays = crossNumberOfRays,
-                angleIrregularity = crossAngleIrregularity,
-                minDivisionsPerRay = crossMinDivisionsPerRay,
-                maxDivisionsPerRay = crossMaxDivisionsPerRay,
-                lightLengthMinRatio = crossLightLengthMinRatio,
-                lightLengthMaxRatio = crossLightLengthMaxRatio,
-                armWindows = crossArmWindows
-            ), // <-- swap ici
+            // radiantCrossComposition (croix rayonnante), RadiantAngelCompositionSystem()
+            // (ange entouré de rayons colorés) — voir juste au-dessus de la recette
+            compositionSystem = angelRobeVariant, // <-- swap ici
 
             // Système 2 — Segmentation (à échanger avec la composition)
             // Alternatives disponibles : GridSegmentationSystem(),
             // VoronoiSegmentationSystem(relaxationIterations),
-            // RadialSegmentationSystem(), SunburstSegmentationSystem()
-            segmentationSystem = RadiantCrossSegmentationSystem(), // <-- swap ici
+            // RadialSegmentationSystem(), SunburstSegmentationSystem(),
+            // RadiantCrossSegmentationSystem()
+            segmentationSystem = RadiantAngelSegmentationSystem(), // <-- swap ici
 
             // Système 3 — Palette
             // Les rayons de lumière n'ont pas besoin de regroupement
@@ -278,7 +330,12 @@ fun main() = application {
             ),
 
             curvatureAmount = curvatureAmount,
-            backgroundColor = backgroundColor
+            backgroundColor = backgroundColor,
+
+            // Ange rayonnant : poitrine dans la teinte sombre de la saison
+            // active. Tête, nimbe, robe et ailes gardent leurs teintes par
+            // défaut (voir ANGEL_…_SHADES dans Palette.kt).
+            angelChestShades = liturgicalPalette.seasonalMedallionShades
         )
 
         // ------------------------

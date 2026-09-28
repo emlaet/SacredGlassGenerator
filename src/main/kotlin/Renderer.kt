@@ -35,7 +35,7 @@ data class VitrailConfig(
     val paletteSystem: PaletteSystem,
     /** Teintes forcées des bras de la croix (ignorées hors RadiantCross). */
     val crossArmShades: List<ColorRGBa>,
-    /** Teintes forcées du médaillon (ignorées hors RadiantCross). */
+    /** Teintes forcées du médaillon de la croix (ignorées hors RadiantCross). */
     val crossMedallionShades: List<ColorRGBa>,
 
     // Système 4 — Plomb
@@ -48,7 +48,23 @@ data class VitrailConfig(
 
     // Géométrie des arêtes et fond de l'aperçu
     val curvatureAmount: Double,
-    val backgroundColor: ColorRGBa
+    val backgroundColor: ColorRGBa,
+
+    // Ange rayonnant (ignorés hors RadiantAngel). En dernier, avec des
+    // valeurs par défaut, pour ne rien changer aux recettes existantes.
+
+    /** Teintes forcées du médaillon de poitrine de l'ange : à régler sur
+     *  la teinte sombre de la saison (seasonalMedallionShades de la
+     *  palette liturgique active — voir TemplateProgram.kt). */
+    val angelChestShades: List<ColorRGBa> = LiturgicalPalettes.ORDINAIRE.seasonalMedallionShades,
+    /** Teintes forcées de la tête de l'ange (blanc cassé par défaut). */
+    val angelHeadShades: List<ColorRGBa> = LiturgicalPalettes.ANGEL_HEAD_SHADES,
+    /** Teintes forcées du nimbe de l'ange (or par défaut). */
+    val angelHaloShades: List<ColorRGBa> = LiturgicalPalettes.ANGEL_HALO_SHADES,
+    /** Teintes forcées de la robe et du cou de l'ange (ivoire doré par défaut). */
+    val angelRobeShades: List<ColorRGBa> = LiturgicalPalettes.ANGEL_ROBE_SHADES,
+    /** Teintes forcées des ailes de l'ange (blanc cassé par défaut). */
+    val angelWingShades: List<ColorRGBa> = LiturgicalPalettes.ANGEL_WING_SHADES
 )
 
 // Toute la génération (Composition → Segmentation → Palette →
@@ -112,12 +128,16 @@ fun renderVitrail(
     // Système 3 — Palette
     val cellColors = config.paletteSystem.assignColors(cells, random).toMutableList()
 
-    // Post-traitement SPÉCIFIQUE à la croix rayonnante : bras forcés
-    // en blanc cassé, médaillon selon MedallionMode (voir
-    // applyRadiantCrossColors dans Palette.kt). ⚠ Consomme des tirages
-    // de random : garder cet appel à cet endroit.
-    if (guide is CompositionGuide.RadiantCross) {
-        applyRadiantCrossColors(
+    // Post-traitements SPÉCIFIQUES aux compositions emblématiques (voir
+    // Palette.kt) :
+    // - croix rayonnante : bras forcés en blanc cassé, médaillon selon
+    //   MedallionMode (applyRadiantCrossColors) ;
+    // - ange rayonnant : poitrine sombre (teinte de la saison), tête et
+    //   ailes en blanc cassé, nimbe doré, cou et robe en ivoire doré
+    //   (applyRadiantAngelColors).
+    // ⚠ Consomment des tirages de random : garder cet appel à cet endroit.
+    when (guide) {
+        is CompositionGuide.RadiantCross -> applyRadiantCrossColors(
             guide = guide,
             cells = cells,
             cellColors = cellColors,
@@ -125,6 +145,18 @@ fun renderVitrail(
             medallionShades = config.crossMedallionShades,
             random = random
         )
+        is CompositionGuide.RadiantAngel -> applyRadiantAngelColors(
+            guide = guide,
+            cells = cells,
+            cellColors = cellColors,
+            chestShades = config.angelChestShades,
+            headShades = config.angelHeadShades,
+            haloShades = config.angelHaloShades,
+            bodyShades = config.angelRobeShades,
+            wingShades = config.angelWingShades,
+            random = random
+        )
+        else -> {}
     }
 
     // Système 4 — Plomb (épaisseur et décalage du reflet mis à l'échelle)

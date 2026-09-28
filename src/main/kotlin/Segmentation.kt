@@ -704,3 +704,496 @@ class RadiantCrossSegmentationSystem : SegmentationSystem {
         return cells
     }
 }
+
+// --------------------------------------------------
+// ANGE RAYONNANT
+// --------------------------------------------------
+
+/** Rôle d'un rayon de l'ange rayonnant. */
+enum class AngelRayRole { LIGHT, BODY, HEAD, WING }
+
+/**
+ * Un rayon de l'ange rayonnant : son rôle, et pour une plume sa
+ * position dans l'aile (0 = bord bas, près de la robe ; 1 = bord
+ * haut) et son rang depuis le bord bas (pour le festonnage une
+ * plume sur deux).
+ */
+data class AngelRay(
+    val role: AngelRayRole,
+    val wingPosition: Double = 0.0,
+    val indexInWindow: Int = 0
+)
+
+/**
+ * Découpage en ange rayonnant. Attend une CompositionGuide.RadiantAngel.
+ *
+ * Même principe que RadiantCrossSegmentationSystem (médaillon central
+ * d'une seule cellule — ici la poitrine —, rayons indépendants depuis
+ * le centre, maillage CONFORME aux frontières partagées), avec quatre
+ * différences :
+ *
+ * 1. Les limites angulaires des rayons ne sont plus tirées
+ *    uniformément sur tout le cercle : la robe, la tête et chaque aile sont
+ *    d'abord posées comme des fenêtres EXACTES, découpées en un
+ *    nombre fixe de rayons (bodyRayCount, un seul pour la tête,
+ *    featherCount) ; les rayons
+ *    de lumière remplissent ensuite les intervalles entre fenêtres.
+ *    Aucun rayon n'est donc à cheval sur une aile et un rayon de
+ *    lumière, et le nombre de plumes est maîtrisé.
+ *
+ * 2. La longueur d'une plume dépend de sa position dans l'aile
+ *    (courte près de la robe, maximale vers wingPeakPosition, un peu
+ *    plus courte au bord haut), avec un festonnage une plume sur deux.
+ *
+ * 3. Chaque plume commence par une rangée commune de « couvertures »
+ *    (même rayon de coupe pour toutes les plumes d'une aile), et sa
+ *    dernière pièce reçoit une pointe (featherTipRatio). La pointe
+ *    n'est jamais partagée avec une autre cellule : elle ne casse pas
+ *    le maillage conforme.
+ *
+ * 4. Le rayon de la tête produit quatre pièces (voir
+ *    angelHeadGeometry) : le cou (du médaillon à
+ *    headWindow.lengthRatio), la tête (un disque posé au milieu du
+ *    bout du cou) et le nimbe, coupé en deux moitiés par un plomb
+ *    vertical au-dessus de la tête. Le disque et le nimbe restent à
+ *    l'intérieur du secteur de la tête : seuls les côtés du nimbe et
+ *    du cou, le long des bords du secteur, touchent les rayons voisins
+ *    (maillage conforme, comme partout ailleurs).
+ */
+class RadiantAngelSegmentationSystem : SegmentationSystem {
+
+    override fun segment(
+        guide: CompositionGuide,
+        width: Double,
+        height: Double,
+        random: Random
+    ): List<List<Vector2>> {
+
+        require(guide is CompositionGuide.RadiantAngel) {
+            "RadiantAngelSegmentationSystem nécessite une CompositionGuide.RadiantAngel"
+        }
+
+        val coreRadius = guide.maxRadius * guide.coreRadiusRatio
+        val span = guide.maxRadius - coreRadius
+
+        val (boundariesDegrees, rays) = generateAngelRays(guide, random)
+        val angleBoundaries = boundariesDegrees.map { Math.toRadians(it) }
+        val numberOfRays = rays.size
+
+        fun pointAt(angle: Double, radius: Double) = Vector2(
+            guide.center.x + kotlin.math.cos(angle) * radius,
+            guide.center.y + kotlin.math.sin(angle) * radius
+        )
+
+        val cells = mutableListOf<List<Vector2>>()
+
+        // Médaillon de poitrine : une seule cellule, comme le médaillon
+        // de la croix.
+        val corePolygon = (0 until numberOfRays).map { i ->
+            pointAt(angleBoundaries[i], coreRadius)
+        }
+        val clippedCore = clipToCanvas(corePolygon, width, height)
+        if (clippedCore.size >= 3) {
+            cells.add(clippedCore)
+        }
+
+        // Rayons de coupe de chaque rayon, selon son rôle.
+        val rayRadii = rays.map { ray ->
+            when (ray.role) {
+                // Variante sans rayons : le secteur est gardé (pour que
+                // robe, tête et ailes restent exactement à leur place)
+                // mais ne produit aucune pièce — le fond reste visible.
+                AngelRayRole.LIGHT -> if (!guide.showLightRays) listOf(coreRadius) else {
+                    val lengthRatio = random.nextDouble(guide.lightLengthMinRatio, guide.lightLengthMaxRatio)
+                    generateRayRadii(
+                        coreRadius,
+                        coreRadius + span * lengthRatio,
+                        guide.lightMinDivisionsPerRay,
+                        guide.lightMaxDivisionsPerRay,
+                        random
+                    )
+                }
+                AngelRayRole.BODY -> generateRayRadii(
+                    coreRadius,
+                    coreRadius + span * guide.bodyWindow.lengthRatio,
+                    guide.bodyMinDivisionsPerRay,
+                    guide.bodyMaxDivisionsPerRay,
+                    random
+                )
+                AngelRayRole.HEAD -> {
+                    val head = angelHeadGeometry(guide)
+                    listOf(coreRadius, head.neckRadius, head.haloSideRadius)
+                }
+                AngelRayRole.WING -> {
+                    val covertRadius = coreRadius + span * guide.wingCovertRatio
+                    val outerRadius = coreRadius + span * featherLengthRatio(guide, ray)
+                    listOf(coreRadius) + generateRayRadii(
+                        covertRadius,
+                        outerRadius,
+                        guide.featherMinDivisions,
+                        guide.featherMaxDivisions,
+                        random
+                    )
+                }
+            }
+        }
+
+        for (i in 0 until numberOfRays) {
+
+            val a0 = angleBoundaries[i]
+            val a1 = angleBoundaries[i + 1]
+
+            val radii = rayRadii[i]
+
+            // Maillage conforme — voir SunburstSegmentationSystem.
+            val leftNeighborRadii = rayRadii[(i - 1 + numberOfRays) % numberOfRays]
+            val rightNeighborRadii = rayRadii[(i + 1) % numberOfRays]
+
+            val leftBoundary = (leftNeighborRadii + radii).distinct().sorted()
+            val rightBoundary = (radii + rightNeighborRadii).distinct().sorted()
+
+            if (rays[i].role == AngelRayRole.HEAD) {
+                val head = angelHeadGeometry(guide)
+                val pieces = angelHeadCells(guide, head, a0, a1, leftBoundary, rightBoundary, coreRadius, ::pointAt)
+                for (piece in pieces) {
+                    val clipped = clipToCanvas(piece, width, height)
+                    if (clipped.size >= 3) {
+                        cells.add(clipped)
+                    }
+                }
+                continue
+            }
+
+            for (j in 0 until radii.size - 1) {
+
+                val rLow = radii[j]
+                val rHigh = radii[j + 1]
+
+                val leftPoints = leftBoundary
+                    .filter { it >= rLow && it <= rHigh }
+                    .map { r -> pointAt(a0, r) }
+
+                val rightPoints = rightBoundary
+                    .filter { it >= rLow && it <= rHigh }
+                    .map { r -> pointAt(a1, r) }
+
+                val isOuterPiece = j == radii.size - 2
+
+                val polygon = when {
+                    rays[i].role == AngelRayRole.WING && isOuterPiece && guide.featherTipRatio > 0.0 -> {
+                        val tip = pointAt((a0 + a1) / 2.0, rHigh + span * guide.featherTipRatio)
+                        leftPoints + tip + rightPoints.reversed()
+                    }
+                    else -> leftPoints + rightPoints.reversed()
+                }
+
+                val clipped = clipToCanvas(polygon, width, height)
+                if (clipped.size >= 3) {
+                    cells.add(clipped)
+                }
+            }
+        }
+
+        return cells
+    }
+}
+
+/**
+ * Géométrie du cou, de la tête et du nimbe de l'ange rayonnant, dans
+ * le secteur headWindow (centre des rayons = poitrine) :
+ * - neckRadius : bout du cou (distance à la poitrine) ;
+ * - headCenter / headRadius : disque de la tête, posé exactement au
+ *   milieu du bout du cou (point bas du disque = milieu de la corde du
+ *   cou) et occupant headFillRatio de la largeur du secteur à cette
+ *   hauteur ;
+ * - haloRadius : cercle du nimbe, concentrique à la tête ;
+ * - haloSideRadius : distance à la poitrine où ce cercle coupe les
+ *   bords du secteur (fin des côtés droits du nimbe).
+ * Calcul purement géométrique (aucun tirage aléatoire) : les
+ * segmentations et applyRadiantAngelColors (Palette.kt) peuvent
+ * l'appeler autant de fois que nécessaire.
+ */
+data class AngelHeadGeometry(
+    val axisAngle: Double,
+    val neckRadius: Double,
+    val headCenter: Vector2,
+    val headRadius: Double,
+    val haloRadius: Double,
+    val haloSideRadius: Double
+)
+
+fun angelHeadGeometry(guide: CompositionGuide.RadiantAngel): AngelHeadGeometry {
+
+    val coreRadius = guide.maxRadius * guide.coreRadiusRatio
+    val span = guide.maxRadius - coreRadius
+
+    val axisAngle = Math.toRadians(guide.headWindow.centerDegrees)
+    val halfWidth = Math.toRadians(guide.headWindow.halfWidthDegrees)
+    val fill = guide.headFillRatio.coerceIn(0.1, 0.95)
+
+    val neckRadius = coreRadius + span * guide.headWindow.lengthRatio
+
+    // Point bas du disque sur la corde du cou (à neckRadius·cos(demi-
+    // ouverture) de la poitrine), disque occupant « fill » de la
+    // largeur du secteur au niveau de son centre.
+    val headDistance = neckRadius * kotlin.math.cos(halfWidth) / (1.0 - fill * kotlin.math.sin(halfWidth))
+    val headRadius = fill * headDistance * kotlin.math.sin(halfWidth)
+    val haloRadius = headRadius * guide.haloRatio
+
+    val headCenter = Vector2(
+        guide.center.x + kotlin.math.cos(axisAngle) * headDistance,
+        guide.center.y + kotlin.math.sin(axisAngle) * headDistance
+    )
+
+    // Intersection du cercle du nimbe avec un bord du secteur :
+    // |poitrine + r·v − centreTête|² = haloRadius², plus grande racine.
+    val edge = axisAngle - halfWidth
+    val vx = kotlin.math.cos(edge)
+    val vy = kotlin.math.sin(edge)
+    val wx = guide.center.x - headCenter.x
+    val wy = guide.center.y - headCenter.y
+    val vw = vx * wx + vy * wy
+    val discriminant = vw * vw - (wx * wx + wy * wy) + haloRadius * haloRadius
+
+    require(discriminant > 0.0) {
+        "Nimbe trop petit pour atteindre les bords du secteur de la tête : augmenter haloRatio (> 1 / headFillRatio)"
+    }
+
+    val haloSideRadius = -vw + kotlin.math.sqrt(discriminant)
+
+    require(haloSideRadius > neckRadius) {
+        "Nimbe incohérent avec la longueur du cou (haloSideRadius <= neckRadius)"
+    }
+
+    return AngelHeadGeometry(axisAngle, neckRadius, headCenter, headRadius, haloRadius, haloSideRadius)
+}
+
+/**
+ * Points d'un arc de cercle de fromAngle à toAngle (radians), sans les
+ * deux extrémités.
+ */
+fun arcPoints(
+    center: Vector2,
+    radius: Double,
+    fromAngle: Double,
+    toAngle: Double,
+    steps: Int
+): List<Vector2> {
+    val n = kotlin.math.max(2, steps)
+    return (1 until n).map { k ->
+        val angle = fromAngle + (toAngle - fromAngle) * k / n
+        Vector2(
+            center.x + kotlin.math.cos(angle) * radius,
+            center.y + kotlin.math.sin(angle) * radius
+        )
+    }
+}
+
+/**
+ * Les quatre pièces du rayon de la tête : cou, tête, nimbe gauche,
+ * nimbe droit (dans cet ordre). Les arcs de la tête et du nimbe sont
+ * calculés une seule fois et partagés tels quels entre pièces voisines,
+ * pour que les plombs communs coïncident exactement.
+ *
+ * leftBoundary / rightBoundary : rayons de coupe le long des deux bords
+ * du secteur, voisins compris (maillage conforme).
+ */
+fun angelHeadCells(
+    guide: CompositionGuide.RadiantAngel,
+    head: AngelHeadGeometry,
+    a0: Double,
+    a1: Double,
+    leftBoundary: List<Double>,
+    rightBoundary: List<Double>,
+    coreRadius: Double,
+    pointAt: (Double, Double) -> Vector2
+): List<List<Vector2>> {
+
+    val alpha = head.axisAngle
+    val steps = guide.headArcPoints
+
+    fun onCircle(radius: Double, angle: Double) = Vector2(
+        head.headCenter.x + kotlin.math.cos(angle) * radius,
+        head.headCenter.y + kotlin.math.sin(angle) * radius
+    )
+
+    // Points clés : bas et haut de la tête, haut du nimbe, coins.
+    val headBottom = onCircle(head.headRadius, alpha + Math.PI)
+    val headTop = onCircle(head.headRadius, alpha)
+    val haloTop = onCircle(head.haloRadius, alpha)
+
+    val neckLeft = pointAt(a0, head.neckRadius)
+    val neckRight = pointAt(a1, head.neckRadius)
+    val haloLeft = pointAt(a0, head.haloSideRadius)
+    val haloRight = pointAt(a1, head.haloSideRadius)
+
+    // Contour de la tête : moitié côté a0 (bas → haut), moitié côté a1
+    // (haut → bas). Côté a0 = angles alpha + π → alpha + 2π.
+    val headSideA0 = arcPoints(head.headCenter, head.headRadius, alpha + Math.PI, alpha + 2.0 * Math.PI, steps)
+    val headSideA1 = arcPoints(head.headCenter, head.headRadius, alpha, alpha + Math.PI, steps)
+
+    // Nimbe : du haut vers le coin côté a0, et du coin côté a1 vers le haut.
+    fun angleAround(p: Vector2) = kotlin.math.atan2(p.y - head.headCenter.y, p.x - head.headCenter.x)
+
+    var leftAngle = angleAround(haloLeft)
+    while (leftAngle >= alpha) leftAngle -= 2.0 * Math.PI
+    while (leftAngle < alpha - Math.PI) leftAngle += 2.0 * Math.PI
+
+    var rightAngle = angleAround(haloRight)
+    while (rightAngle <= alpha) rightAngle += 2.0 * Math.PI
+    while (rightAngle > alpha + Math.PI) rightAngle -= 2.0 * Math.PI
+
+    val haloArcA0 = arcPoints(head.headCenter, head.haloRadius, alpha, leftAngle, steps)
+    val haloArcA1 = arcPoints(head.headCenter, head.haloRadius, rightAngle, alpha, steps)
+
+    // Points de coupe des voisins le long des côtés du nimbe.
+    val sideA0 = leftBoundary.filter { it > head.neckRadius && it < head.haloSideRadius }
+        .sortedDescending().map { pointAt(a0, it) }
+    val sideA1 = rightBoundary.filter { it > head.neckRadius && it < head.haloSideRadius }
+        .sorted().map { pointAt(a1, it) }
+
+    val neck = leftBoundary.filter { it >= coreRadius && it <= head.neckRadius }.map { pointAt(a0, it) } +
+            headBottom +
+            rightBoundary.filter { it >= coreRadius && it <= head.neckRadius }.map { pointAt(a1, it) }.reversed()
+
+    val headDisc = listOf(headBottom) + headSideA0 + headTop + headSideA1
+
+    val haloA0 = listOf(neckLeft, headBottom) + headSideA0 + listOf(headTop, haloTop) +
+            haloArcA0 + haloLeft + sideA0
+
+    val haloA1 = listOf(neckRight) + sideA1 + haloRight + haloArcA1 + listOf(haloTop, headTop) +
+            headSideA1 + headBottom
+
+    return listOf(neck, headDisc, haloA0, haloA1)
+}
+
+/**
+ * Longueur d'une plume (en proportion de l'espace tête → maxRadius)
+ * selon sa position dans l'aile : montée en quart de sinus du bord bas
+ * (wingLowerLengthRatio) jusqu'au pic (wingPeakLengthRatio, atteint à
+ * wingPeakPosition), puis légère descente parabolique jusqu'au bord
+ * haut (wingUpperEdgeRatio × pic). Une plume sur deux est raccourcie
+ * de featherScallop (bord festonné).
+ */
+fun featherLengthRatio(
+    guide: CompositionGuide.RadiantAngel,
+    ray: AngelRay
+): Double {
+
+    val t = ray.wingPosition.coerceIn(0.0, 1.0)
+    val peakPosition = guide.wingPeakPosition.coerceIn(0.05, 0.95)
+    val lowerShare = guide.wingLowerLengthRatio / guide.wingPeakLengthRatio
+
+    val shape = if (t <= peakPosition) {
+        lowerShare + (1.0 - lowerShare) * kotlin.math.sin(Math.PI / 2.0 * t / peakPosition)
+    } else {
+        val u = (t - peakPosition) / (1.0 - peakPosition)
+        1.0 - (1.0 - guide.wingUpperEdgeRatio) * u * u
+    }
+
+    var length = guide.wingPeakLengthRatio * shape
+
+    if (ray.indexInWindow % 2 == 1) {
+        length *= (1.0 - guide.featherScallop)
+    }
+
+    return length
+}
+
+/**
+ * Limites angulaires (en DEGRÉS, croissantes, sur un tour complet à
+ * partir du bord de la robe) et rôle de chaque rayon de l'ange.
+ * Renvoie numberOfRays + 1 limites (la dernière = la première + 360)
+ * et numberOfRays rayons.
+ */
+fun generateAngelRays(
+    guide: CompositionGuide.RadiantAngel,
+    random: Random
+): Pair<List<Double>, List<AngelRay>> {
+
+    data class Window(
+        val start: Double,
+        val end: Double,
+        val role: AngelRayRole,
+        val rayCount: Int,
+        val lowerEdge: Double
+    )
+
+    val body = guide.bodyWindow
+    val origin = body.centerDegrees - body.halfWidthDegrees
+
+    // Ramène un angle dans [origin, origin + 360).
+    fun unwrap(angle: Double): Double =
+        ((angle - origin) % 360.0 + 360.0) % 360.0 + origin
+
+    val head = guide.headWindow
+    val headStart = unwrap(head.centerDegrees - head.halfWidthDegrees)
+
+    val windows = mutableListOf(
+        Window(origin, origin + 2.0 * body.halfWidthDegrees, AngelRayRole.BODY, guide.bodyRayCount, origin),
+        Window(headStart, headStart + 2.0 * head.halfWidthDegrees, AngelRayRole.HEAD, 1, headStart)
+    )
+
+    for (wing in guide.wingWindows) {
+        val start = unwrap(wing.centerDegrees - wing.halfWidthDegrees)
+        val end = start + 2.0 * wing.halfWidthDegrees
+        // Bord bas = celui des deux bords le plus proche de la verticale
+        // descendante (90°), c'est-à-dire du côté de la robe.
+        val lowerEdge = if (angularDistanceDegrees(start, 90.0) <= angularDistanceDegrees(end, 90.0)) start else end
+        windows.add(Window(start, end, AngelRayRole.WING, wing.featherCount, lowerEdge))
+    }
+
+    windows.sortBy { it.start }
+
+    val boundaries = mutableListOf(origin)
+    val rays = mutableListOf<AngelRay>()
+    var cursor = origin
+
+    fun addLightRays(from: Double, to: Double) {
+        val gap = to - from
+        if (gap <= 1e-9) return
+        val count = kotlin.math.max(1, kotlin.math.round(gap / guide.lightRayWidthDegrees).toInt())
+        val share = gap / count
+        val jitterRange = share * guide.angleIrregularity.coerceIn(0.0, 0.9) / 2.0
+        for (k in 1 until count) {
+            val jitter = if (jitterRange > 0.0) random.nextDouble(-jitterRange, jitterRange) else 0.0
+            boundaries.add(from + k * share + jitter)
+        }
+        boundaries.add(to)
+        repeat(count) { rays.add(AngelRay(AngelRayRole.LIGHT)) }
+    }
+
+    for (window in windows) {
+
+        require(window.start >= cursor - 1e-9) {
+            "Les fenêtres de la robe, de la tête et des ailes se chevauchent (${window.role} à ${window.start}°)"
+        }
+
+        addLightRays(cursor, window.start)
+
+        val share = (window.end - window.start) / window.rayCount
+        val jitterRange = share * guide.featherJitter.coerceIn(0.0, 0.9) / 2.0
+
+        for (k in 1 until window.rayCount) {
+            val jitter = if (jitterRange > 0.0) random.nextDouble(-jitterRange, jitterRange) else 0.0
+            boundaries.add(window.start + k * share + jitter)
+        }
+        boundaries.add(window.end)
+
+        for (k in 0 until window.rayCount) {
+            val middle = window.start + (k + 0.5) * share
+            val position = kotlin.math.abs(middle - window.lowerEdge) / (window.end - window.start)
+            // Rang compté depuis le bord BAS de la fenêtre (et non depuis
+            // son début angulaire) : les deux ailes, parcourues en sens
+            // inverse, ont ainsi exactement le même festonnage en miroir.
+            val rankFromLowerEdge = if (window.lowerEdge == window.start) k else window.rayCount - 1 - k
+            rays.add(AngelRay(window.role, position, rankFromLowerEdge))
+        }
+
+        cursor = window.end
+    }
+
+    addLightRays(cursor, origin + 360.0)
+
+    return boundaries to rays
+}

@@ -357,6 +357,103 @@ fun applyRadiantCrossColors(
     }
 }
 
+// --------------------------------------------------
+// POST-TRAITEMENT PROPRE À L'ANGE RAYONNANT
+// --------------------------------------------------
+
+/**
+ * Équivalent de applyRadiantCrossColors pour l'ange rayonnant : force,
+ * APRÈS le tirage normal du PaletteSystem, les couleurs des éléments
+ * de la figure. Les rayons de lumière gardent la couleur tirée par le
+ * PaletteSystem.
+ *
+ * - médaillon de poitrine → chestShades (sombre, pour qu'il ne se lise
+ *   pas comme une tête) ;
+ * - tête → headShades ; nimbe → haloShades ;
+ * - cou et robe → bodyShades (la robe garde les couleurs de la palette
+ *   liturgique si guide.robeUsesPalette) ;
+ * - ailes → wingShades.
+ *
+ * Classification (même principe que pour la croix) : centroïde à moins
+ * de 1.05 × coreRadius de la poitrine → médaillon ; sinon, selon
+ * l'angle du centroïde :
+ * - secteur de la tête : cou si le centroïde est avant le bout du cou,
+ *   tête s'il est tout près du centre du disque, nimbe sinon (voir
+ *   angelHeadGeometry, Segmentation.kt) ;
+ * - secteur de la robe → robe ; secteur d'une aile → aile.
+ * Les limites des rayons de l'ange coïncidant exactement avec ces
+ * secteurs (voir generateAngelRays, Segmentation.kt), aucune cellule
+ * n'est à cheval.
+ *
+ * ⚠ Reproductibilité : consomme des tirages de random (une nuance par
+ * cellule forcée). À appeler au même endroit du pipeline que
+ * applyRadiantCrossColors (voir Renderer.kt).
+ */
+fun applyRadiantAngelColors(
+    guide: CompositionGuide.RadiantAngel,
+    cells: List<List<Vector2>>,
+    cellColors: MutableList<ColorRGBa>,
+    chestShades: List<ColorRGBa>,
+    headShades: List<ColorRGBa>,
+    haloShades: List<ColorRGBa>,
+    bodyShades: List<ColorRGBa>,
+    wingShades: List<ColorRGBa>,
+    random: Random
+) {
+
+    val coreRadius = guide.maxRadius * guide.coreRadiusRatio
+    val head = angelHeadGeometry(guide)
+
+    fun pick(shades: List<ColorRGBa>) = shades[random.nextInt(shades.size)]
+
+    cells.forEachIndexed { index, cell ->
+
+        val centroid = polygonCentroid(cell)
+
+        val dx = centroid.x - guide.center.x
+        val dy = centroid.y - guide.center.y
+        val distanceFromCenter = sqrt(dx * dx + dy * dy)
+
+        if (distanceFromCenter < coreRadius * 1.05) {
+            cellColors[index] = pick(chestShades)
+            return@forEachIndexed
+        }
+
+        val angleDegrees = Math.toDegrees(kotlin.math.atan2(dy, dx)).let {
+            if (it < 0.0) it + 360.0 else it
+        } % 360.0
+
+        fun inWindow(centerDegrees: Double, halfWidthDegrees: Double) =
+            angularDistanceDegrees(angleDegrees, centerDegrees) <= halfWidthDegrees
+
+        val headWindow = guide.headWindow
+        val body = guide.bodyWindow
+
+        when {
+            inWindow(headWindow.centerDegrees, headWindow.halfWidthDegrees) -> {
+                val hx = centroid.x - head.headCenter.x
+                val hy = centroid.y - head.headCenter.y
+                val distanceFromHead = sqrt(hx * hx + hy * hy)
+                cellColors[index] = when {
+                    distanceFromCenter < head.neckRadius -> pick(bodyShades)
+                    distanceFromHead < head.headRadius * 0.5 -> pick(headShades)
+                    else -> pick(haloShades)
+                }
+            }
+            inWindow(body.centerDegrees, body.halfWidthDegrees) -> {
+                // Variante « robe liturgique » : la robe garde la couleur
+                // tirée par le PaletteSystem (couleurs de la saison).
+                if (!guide.robeUsesPalette) {
+                    cellColors[index] = pick(bodyShades)
+                }
+            }
+            guide.wingWindows.any { inWindow(it.centerDegrees, it.halfWidthDegrees) } -> {
+                cellColors[index] = pick(wingShades)
+            }
+        }
+    }
+}
+
 
 // --------------------------------------------------
 // PALETTES LITURGIQUES (données)
@@ -448,6 +545,37 @@ object LiturgicalPalettes {
         ColorRGBa.fromHex("#F2E8CE"), // blanc cassé
         ColorRGBa.fromHex("#F7EFDD"), // ivoire plus clair
         ColorRGBa.fromHex("#EBE0C2")  // ivoire plus soutenu
+    )
+
+    /**
+     * Nuances de la ROBE de l'ange rayonnant : ivoire chaud à or pâle,
+     * un ton plus doré que les ailes pour que le corps se distingue des
+     * ailes. Constantes à travers les saisons, comme les bras de la
+     * croix. Réglage de départ, à ajuster à l'œil.
+     */
+    val ANGEL_ROBE_SHADES = listOf(
+        ColorRGBa.fromHex("#F0E2BC"), // ivoire doré
+        ColorRGBa.fromHex("#E6D29E"), // paille claire
+        ColorRGBa.fromHex("#DCC282")  // or pâle
+    )
+
+    /**
+     * Nuances des AILES de l'ange rayonnant : blanc cassé, les mêmes
+     * que les bras de la croix.
+     */
+    val ANGEL_WING_SHADES = CROSS_ARM_SHADES
+
+    /** Nuances de la TÊTE de l'ange rayonnant : blanc cassé, comme les ailes. */
+    val ANGEL_HEAD_SHADES = CROSS_ARM_SHADES
+
+    /**
+     * Nuances du NIMBE de l'ange rayonnant : or franc, pour détacher la
+     * tête des ailes blanches. Réglage de départ, à ajuster à l'œil.
+     */
+    val ANGEL_HALO_SHADES = listOf(
+        ColorRGBa.fromHex("#D9A441"), // or de référence (commun à plusieurs palettes)
+        ColorRGBa.fromHex("#E0B84F"), // or jaune
+        ColorRGBa.fromHex("#C99A2E")  // or soutenu
     )
 
     /** Vert — Temps ordinaire (LiturgicalPaletteGreen). */

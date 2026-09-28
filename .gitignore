@@ -10,4 +10,5 @@ screenshots/
 gui-parameters/
 ffmpegOutput.txt
 ShaderError.glsl
-
+   # Exports haute résolution du générateur (touche "e")
+   exports/
