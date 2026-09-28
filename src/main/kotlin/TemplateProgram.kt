@@ -227,18 +227,20 @@ fun createCurvedContour(
 // segmentation, palette, plomb ou verre : il se contente
 // d'assembler les 5 systèmes (Composition.kt, Segmentation.kt,
 // Palette.kt, Leading.kt, Glass.kt) et de piloter la boucle de
-// rendu OpenRNDR.
+// rendu OpenRNDR. Les données de palettes (saisons liturgiques)
+// sont dans Palette.kt, après les algorithmes.
 //
-// Réglage actuel : RadiantCross + RadiantCross + Palette aléatoire
-// pondérée (vert, temps ordinaire) + Basic (plomb noir simple) + Procedural
-// (avec lumière globale + opalescence). Même moteur que Sunburst
-// (rayons indépendants depuis un centre), mais certains rayons sont
-// désignés comme les bras d'une croix latine (plus longs, forcés en
-// blanc cassé) tandis que les autres jouent le rôle de rayons de
-// lumière plus courts et colorés autour d'elle — esprit "croix de
-// lumière/gloire", sans avoir besoin de découpe géométrique (pas de
-// soustraction de polygones dans la boîte à outils) : la croix EST
-// simplement un groupe de rayons plus longs et distinctement colorés.
+// Réglage actuel : Composition RadiantCross + Segmentation
+// RadiantCross + Palette aléatoire pondérée (vert, temps ordinaire)
+// + Basic (plomb noir simple) + Procedural (avec lumière globale +
+// opalescence). Même moteur que Sunburst (rayons indépendants depuis
+// un centre), mais certains rayons sont désignés comme les bras
+// d'une croix latine (plus longs, forcés en blanc cassé) tandis que
+// les autres jouent le rôle de rayons de lumière plus courts et
+// colorés autour d'elle — esprit "croix de lumière/gloire", sans
+// avoir besoin de découpe géométrique (pas de soustraction de
+// polygones dans la boîte à outils) : la croix EST simplement un
+// groupe de rayons plus longs et distinctement colorés.
 //
 // Alternatives déjà implémentées et prêtes à l'emploi (voir les
 // lignes marquées "// <-- swap ici" plus bas) :
@@ -258,11 +260,14 @@ fun createCurvedContour(
 //     présents plus bas, non utilisés tant que RadiantCross est actif)
 //   - RadiantCrossCompositionSystem(...) + RadiantCrossSegmentationSystem()  [réglage actuel]
 //
-//   Palette :
+//   Palette (algorithme de répartition) :
 //   - RandomPaletteSystem(flatColors)                 [résultat "poivre et sel" sur cellules petites/nombreuses, évité]
 //   - AdjacencyAwarePaletteSystem(flatColors)          [pousse à l'alternance, pas au regroupement]
 //   - CappedClusterPaletteSystem(paletteFamilies, ...) [pour cellules Voronoï petites et nombreuses — voir Palette.kt]
-//   - WeightedRandomPaletteSystem(paletteFamilies)     [réglage actuel — voir paletteFamiliesOrdinaire/Noel/Avent plus bas pour changer de saison liturgique]
+//   - WeightedRandomPaletteSystem(paletteFamilies)     [réglage actuel]
+//
+//   Palette (saison liturgique) : voir la ligne "val liturgicalPalette"
+//   plus bas, et Palette.kt pour les sept palettes disponibles.
 //
 //   Plomb :
 //   - LeadStyle(width = strokeWeight, color = strokeColor)                      [réglage actuel]
@@ -313,17 +318,11 @@ fun main() = application {
         val sunburstAngleIrregularity = 0.35
         val sunburstMinDivisionsPerRay = 2
         val sunburstMaxDivisionsPerRay = 4
-        // Nuances proches de blanc cassé pour les BRAS de la croix —
-        // constante visuelle à travers toutes les saisons liturgiques
-        // (contrairement au médaillon, voir crossMedallionShades plus
-        // bas, qui varie par saison). Légère variation entre les
-        // triangles/segments plutôt qu'une teinte plate identique à
-        // chaque génération.
-        val crossArmShades = listOf(
-            ColorRGBa.fromHex("#F2E8CE"), // blanc cassé
-            ColorRGBa.fromHex("#F7EFDD"), // ivoire plus clair
-            ColorRGBa.fromHex("#EBE0C2")  // ivoire plus soutenu
-        )
+
+        // Nuances blanc cassé des BRAS de la croix — constantes à travers
+        // toutes les saisons (voir LiturgicalPalettes.CROSS_ARM_SHADES
+        // dans Palette.kt).
+        val crossArmShades = LiturgicalPalettes.CROSS_ARM_SHADES
 
         // Sunburst plein cadre (alternative documentée plus haut dans le
         // fichier) : réutilise crossArmShades pour son médaillon.
@@ -389,162 +388,26 @@ fun main() = application {
         // blanc neutre.
         val backgroundColor = ColorRGBa.fromHex("#0E2A47")
 
-        // Système 3 — palettes liturgiques, reprises fidèlement des
-        // project documents fournis (objets LiturgicalPaletteXxx,
-        // eux-mêmes référencés à la PGMR n.346) plutôt qu'improvisées —
-        // chaque teinte documentée devient sa propre PaletteFamily à une
-        // seule nuance, avec le pourcentage documenté comme poids exact.
+        // Système 3 — saison liturgique (données dans Palette.kt).
         //
-        // Chaque saison a aussi sa propre teinte de MÉDAILLON, reprise
-        // du "cœur sombre réservé" de son document ("hors tirage
-        // aléatoire du cluster system" — cœur de médaillon, jonctions de
-        // rayons). Trois options ont été comparées visuellement avant de
-        // choisir ce traitement : médaillon toujours crème (comme les
-        // bras) ; médaillon en cœur sombre réservé ; accent "glow" rare
-        // dans les rayons. Le cœur sombre a été retenu — il fait
-        // nettement mieux ressortir la croix, et résout au passage un
-        // souci de contraste sur Noël (bras crème qui se fondaient dans
-        // un champ blanc/or trop pâle : le médaillon sombre donne un
-        // point d'ancrage fort quelle que soit la palette).
-        //
-        // Priorité de mise en place demandée : Temps ordinaire (actif
-        // par défaut — c'est la période liturgique en cours), puis
-        // Noël, puis Avent — les quatre autres (rouge, noire, rose,
-        // marial) ajoutées ensuite, sur demande, une fois le principe
-        // validé sur les trois premières.
+        // <-- swap ici : palette active. Sept disponibles :
+        //   LiturgicalPalettes.ORDINAIRE — vert, temps ordinaire [réglage actuel]
+        //   LiturgicalPalettes.NOEL      — blanc et or, Noël/Pâques
+        //   LiturgicalPalettes.AVENT     — violet, Avent/Carême
+        //   LiturgicalPalettes.ROUGE     — rouge, Pentecôte/martyrs
+        //   LiturgicalPalettes.NOIRE     — noir, funérailles (facultatif)
+        //   LiturgicalPalettes.ROSE      — rose, Gaudete/Laetare
+        //   LiturgicalPalettes.MARIAL    — bleu marial (privilège régional, PAS une des six couleurs universelles)
+        val liturgicalPalette = LiturgicalPalettes.ORDINAIRE
 
-        // Vert — Temps ordinaire (LiturgicalPaletteGreen). [réglage actuel]
-        val paletteFamiliesOrdinaire = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#1F4D33")), 30.0), // greenDeep — ancrage
-            PaletteFamily(listOf(ColorRGBa.fromHex("#3C7A4E")), 35.0), // greenLeaf — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#7FB069")), 13.0), // greenSoft — transmission lumineuse
-            PaletteFamily(listOf(ColorRGBa.fromHex("#C9DDB0")), 7.0),  // greenPale — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D9A441")), 7.0),  // amberGold — reflets
-            PaletteFamily(listOf(ColorRGBa.fromHex("#A9722A")), 3.0),  // amberBurnt — contraste chaud
-            PaletteFamily(listOf(ColorRGBa.fromHex("#8C4A32")), 4.0)   // rust — touche isolée (doc. ~3-5%)
-        )
-        // nearBlackGreen — cœur de médaillon, jonctions de rayons.
-        val crossMedallionOrdinaire = listOf(ColorRGBa.fromHex("#14231A"))
+        // <-- swap ici : teinte du MÉDAILLON, indépendante de la saison
+        // (voir MedallionMode dans Palette.kt) :
+        //   MedallionMode.HOST     — toujours crème, lecture "hostie" [réglage actuel]
+        //   MedallionMode.SEASONAL — cœur sombre propre à la saison active
+        val medallionMode = MedallionMode.HOST
 
-        // Blanc et or — Noël/Pâques (LiturgicalPaletteWhiteGold). Le
-        // drap d'or remplace canoniquement le blanc pour les grandes
-        // occasions (PGMR) — d'où la parité blanc/or dans ce document,
-        // contrairement à ma première tentative improvisée (un or trop
-        // proche du moutarde, et une touche de bleu ajoutée par
-        // association hivernale personnelle plutôt que par recherche
-        // liturgique — retirée après vérification : le bleu ne fait pas
-        // partie des couleurs du rite romain).
-        val paletteFamiliesNoel = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#F2ECD9")), 22.0), // ivory — corps principal blanc
-            PaletteFamily(listOf(ColorRGBa.fromHex("#FAF6EC")), 15.0), // pearl — halo lumineux
-            PaletteFamily(listOf(ColorRGBa.fromHex("#F0C674")), 15.0), // goldLight — gloire, auréole
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D9A441")), 20.0), // gold — or de référence
-            PaletteFamily(listOf(ColorRGBa.fromHex("#E5D8B8")), 10.0), // champagne — transition
-            PaletteFamily(listOf(ColorRGBa.fromHex("#9C6F24")), 10.0)  // goldAntique — ancrage doré
-        )
-        // darkBronze — cœur de médaillon ("reste chaud, jamais noir pur").
-        val crossMedallionNoel = listOf(ColorRGBa.fromHex("#4A3312"))
-
-        // Violet — Avent/Carême (LiturgicalPaletteViolet).
-        val paletteFamiliesAvent = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#3D2645")), 20.0), // violetDeep — ancrage, pénitence
-            PaletteFamily(listOf(ColorRGBa.fromHex("#5B3168")), 32.0), // violetBishop — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#9B7BB8")), 18.0), // violetLight — transmission
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D9CBE0")), 10.0), // violetPale — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#9B9490")), 8.0),  // ashSilver — cendre
-            PaletteFamily(listOf(ColorRGBa.fromHex("#6B5D52")), 6.0)   // duskBronze — sobriété, jeûne
-        )
-        // nearBlackViolet — cœur de médaillon, pénitence profonde.
-        val crossMedallionAvent = listOf(ColorRGBa.fromHex("#1F1420"))
-
-        // Rouge — Passion (Rameaux, Vendredi saint), Pentecôte/Esprit-Saint,
-        // apôtres et martyrs (LiturgicalPaletteRed).
-        val paletteFamiliesRouge = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#5C1220")), 18.0), // garnetDeep — sang de la Passion
-            PaletteFamily(listOf(ColorRGBa.fromHex("#A6242E")), 32.0), // scarlet — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D6491F")), 20.0), // flameVermilion — feu de Pentecôte
-            PaletteFamily(listOf(ColorRGBa.fromHex("#F2A65A")), 10.0), // paleFlame — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D9A441")), 10.0), // gold — couronne des martyrs
-            PaletteFamily(listOf(ColorRGBa.fromHex("#8B5A1F")), 7.0)   // goldAntique — contraste chaud
-        )
-        // nearBlackGarnet — ténèbres du Golgotha, cœur de médaillon.
-        val crossMedallionRouge = listOf(ColorRGBa.fromHex("#210608"))
-
-        // Noir — messes des défunts, funérailles (usage facultatif depuis
-        // Vatican II, le violet étant l'option ordinaire) (LiturgicalPaletteBlack).
-        val paletteFamiliesNoire = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#14100E")), 22.0), // blackDeep — ténèbres du deuil
-            PaletteFamily(listOf(ColorRGBa.fromHex("#2E2B28")), 30.0), // anthracite — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#57534C")), 18.0), // slateGrey — transmission lumineuse
-            PaletteFamily(listOf(ColorRGBa.fromHex("#8B8781")), 10.0), // pearlGreyDark — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#A6A6A8")), 10.0), // silver — dignité du deuil
-            PaletteFamily(listOf(ColorRGBa.fromHex("#251A2C")), 7.0)   // violetUndertone — écho du violet
-        )
-        // blackVioletCore — noir le plus profond, cœur de médaillon.
-        val crossMedallionNoire = listOf(ColorRGBa.fromHex("#0D0A0F"))
-
-        // Rose — 3e dimanche de l'Avent (Gaudete) et 4e dimanche de Carême
-        // (Laetare) uniquement, variante ponctuelle du violet
-        // (LiturgicalPaletteRose).
-        val paletteFamiliesRose = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#7A4A5C")), 18.0), // roseDeep — ancrage
-            PaletteFamily(listOf(ColorRGBa.fromHex("#B08093")), 32.0), // roseMain — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#DCAEB8")), 20.0), // roseLight — transmission
-            PaletteFamily(listOf(ColorRGBa.fromHex("#EDD9DC")), 10.0), // rosePale — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#DCAE79")), 8.0),  // goldSoft — reflets
-            PaletteFamily(listOf(ColorRGBa.fromHex("#96684F")), 5.0)   // roseBronze — contraste chaud
-        )
-        // nearBlackMauve — écho du violet parent, cœur de médaillon.
-        val crossMedallionRose = listOf(ColorRGBa.fromHex("#3D2530"))
-
-        // Bleu marial — PAS une des six couleurs liturgiques universelles
-        // de la PGMR (voir la note dans MarianBluePalette) : privilège
-        // régional (Espagne, Amérique latine), réservé à l'Immaculée
-        // Conception (8 décembre). Palette dévotionnelle, pas liturgique
-        // au sens strict — à documenter comme telle si commercialisée,
-        // pas présentée comme une "couleur du calendrier" au même titre
-        // que les six autres.
-        val paletteFamiliesMarial = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#1D3461")), 20.0), // blueDeep — outremer profond
-            PaletteFamily(listOf(ColorRGBa.fromHex("#2E5C9A")), 32.0), // blueMain — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#7FA8D9")), 18.0), // skyBlue — transmission
-            PaletteFamily(listOf(ColorRGBa.fromHex("#C9DCEF")), 10.0), // bluePale — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#A9B4BD")), 10.0), // silverStar — étoiles
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D9A441")), 7.0)   // gold — couronne mariale
-        )
-        // nightBlueCore — nuit mariale, cœur de médaillon.
-        val crossMedallionMarial = listOf(ColorRGBa.fromHex("#0C1830"))
-
-        // <-- swap ici (ligne du haut) : palette de rayons active.
-        // Sept disponibles :
-        //   paletteFamiliesOrdinaire — vert, temps ordinaire [réglage actuel]
-        //   paletteFamiliesNoel      — blanc et or, Noël/Pâques
-        //   paletteFamiliesAvent     — violet, Avent/Carême
-        //   paletteFamiliesRouge     — rouge, Pentecôte/martyrs
-        //   paletteFamiliesNoire     — noir, funérailles (facultatif)
-        //   paletteFamiliesRose      — rose, Gaudete/Laetare
-        //   paletteFamiliesMarial    — bleu marial (privilège régional, PAS une des six couleurs universelles — voir la note plus haut)
-        val paletteFamilies = paletteFamiliesOrdinaire
-
-        // <-- swap ici (ligne du bas) : teinte du MÉDAILLON — indépendant
-        // de la palette de rayons ci-dessus, donc les deux se combinent
-        // librement (n'importe quelle saison avec Option 1 ou Option 2).
-        //
-        // Option 1 — crossArmShades : le médaillon reste TOUJOURS crème,
-        // comme les bras, quelle que soit la saison. Lecture liturgique
-        // proposée par Astrea : le disque blanc central évoque l'hostie
-        // — cohérent avec le Saint-Sacrement quelle que soit la période
-        // de l'année, pas seulement une question de contraste. [réglage
-        // actuel]
-        //
-        // Option 2 — crossMedallionOrdinaire / Noel / Avent / Rouge /
-        // Noire / Rose / Marial (à faire correspondre à la palette de
-        // rayons choisie juste au-dessus) : le médaillon prend le "cœur
-        // sombre réservé" propre à la saison. Fait ressortir la croix un
-        // peu plus nettement dans la comparaison visuelle qui a précédé
-        // ce choix — mais moins cohérent avec la lecture "hostie" d'Option
-        // 1, puisque le médaillon change alors de couleur avec la saison.
-        val crossMedallionShades = crossArmShades
+        val paletteFamilies = liturgicalPalette.families
+        val crossMedallionShades = liturgicalPalette.medallionShades(medallionMode)
 
         // ------------------------
         // PIPELINE — 5 SYSTÈMES + RENDU
@@ -557,7 +420,7 @@ fun main() = application {
         // pas se contenter d'agrandir l'image déjà calculée à 768×576
         // (le plomb, la courbure des arêtes, la taille des cellules sont
         // tous définis en PIXELS ABSOLUS — les ré-agrandir sans
-        // régénérer la géométie donnerait un plomb relativement plus
+        // régénérer la géométrie donnerait un plomb relativement plus
         // fin, une courbure relativement plus plate, etc. à haute
         // résolution). À la place, on régénère tout le motif à la
         // résolution cible avec le MÊME seed (donc le même dessin), et
@@ -633,14 +496,12 @@ fun main() = application {
             // Post-traitement SPÉCIFIQUE à la croix rayonnante : les
             // bras sont forcés vers crossArmShades (blanc cassé, constant
             // selon les saisons), le médaillon vers crossMedallionShades
-            // (le "cœur sombre réservé" propre à la saison active) — les
-            // deux distincts, contrairement au premier jet qui les
-            // forçait tous les deux vers la même teinte crème. Sans ce
-            // forçage, un bras ou le médaillon aurait pu piocher au
-            // hasard la même famille que les rayons et se fondre dans le
-            // décor. Ce n'est pas un Système générique — c'est une
-            // signature visuelle propre à ce style de composition, donc
-            // traité ici plutôt que dans Palette.kt.
+            // (crème ou "cœur sombre réservé" de la saison, selon
+            // medallionMode). Sans ce forçage, un bras ou le médaillon
+            // aurait pu piocher au hasard la même famille que les rayons
+            // et se fondre dans le décor. Ce n'est pas un Système
+            // générique — c'est une signature visuelle propre à ce style
+            // de composition, donc traité ici plutôt que dans Palette.kt.
             if (guide is CompositionGuide.RadiantCross) {
 
                 val coreRadius = guide.maxRadius * guide.coreRadiusRatio
