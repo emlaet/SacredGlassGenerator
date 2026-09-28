@@ -286,9 +286,9 @@ fun computeMaxRadiusToCorner(
  *
  * Le médaillon central est UNE SEULE cellule (le polygone du cercle
  * intérieur, pas un triangle par rayon) : coloré uniformément en
- * post-traitement par TemplateProgram.kt, il se lit comme un vrai
- * disque, sans traits de plomb internes qui trahiraient la structure
- * en rayons sous-jacente.
+ * post-traitement (applyRadiantCrossColors, Palette.kt), il se lit
+ * comme un vrai disque, sans traits de plomb internes qui
+ * trahiraient la structure en rayons sous-jacente.
  *
  * Les largeurs angulaires des rayons sont elles-mêmes irrégulières
  * (angleIrregularity), pour éviter que même l'écartement des rayons
@@ -335,7 +335,7 @@ class SunburstSegmentationSystem : SegmentationSystem {
         // formé par tous les points du cercle intérieur), pas un
         // triangle par rayon. C'est la correction du défaut relevé à
         // l'usage : même coloriés à l'identique en post-traitement
-        // (TemplateProgram.kt), des triangles séparés restent des
+        // (Palette.kt), des triangles séparés restent des
         // cellules séparées, donc le Système 4 (Plomb) dessine quand
         // même les traits entre elles — visible comme des "rayons"
         // internes qui trahissent la structure sous-jacente. En

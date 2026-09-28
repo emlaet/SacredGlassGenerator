@@ -1,5 +1,6 @@
 import org.openrndr.color.ColorRGBa
 import org.openrndr.math.Vector2
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 // --------------------------------------------------
@@ -289,6 +290,71 @@ fun findAdjacentCells(
     }
 
     return neighbors
+}
+
+// --------------------------------------------------
+// POST-TRAITEMENT PROPRE À LA CROIX RAYONNANTE
+// --------------------------------------------------
+
+/**
+ * Force les couleurs des éléments structurels de la croix rayonnante,
+ * APRÈS le tirage normal du PaletteSystem : les bras vers armShades
+ * (blanc cassé, constant selon les saisons), le médaillon vers
+ * medallionShades (crème ou "cœur sombre réservé" de la saison, selon
+ * MedallionMode). Sans ce forçage, un bras ou le médaillon pourrait
+ * piocher au hasard la même famille que les rayons et se fondre dans
+ * le décor.
+ *
+ * Ce n'est pas un PaletteSystem générique : c'est une signature
+ * visuelle propre à ce style de composition. Elle modifie cellColors
+ * sur place.
+ *
+ * ⚠ Reproductibilité : cette fonction consomme des tirages de random
+ * (une nuance par cellule de bras ou de médaillon). Elle doit rester
+ * appelée au même moment du pipeline — juste après
+ * paletteSystem.assignColors() et avant
+ * glassSystem.assignMaterialVariation() — sinon un même seed ne
+ * produira plus la même œuvre.
+ *
+ * Classification : une cellule est dans le médaillon si son centroïde
+ * est à moins de 1.05 × coreRadius du centre ; sinon, elle est dans un
+ * bras si l'angle de son centroïde tombe dans une ArmWindow
+ * (classifyAngle, Segmentation.kt).
+ */
+fun applyRadiantCrossColors(
+    guide: CompositionGuide.RadiantCross,
+    cells: List<List<Vector2>>,
+    cellColors: MutableList<ColorRGBa>,
+    armShades: List<ColorRGBa>,
+    medallionShades: List<ColorRGBa>,
+    random: Random
+) {
+
+    val coreRadius = guide.maxRadius * guide.coreRadiusRatio
+
+    cells.forEachIndexed { index, cell ->
+
+        val centroid = polygonCentroid(cell)
+
+        val dx = centroid.x - guide.center.x
+        val dy = centroid.y - guide.center.y
+        val distanceFromCenter = sqrt(dx * dx + dy * dy)
+
+        val isMedallion = distanceFromCenter < coreRadius * 1.05
+
+        if (isMedallion) {
+            cellColors[index] = medallionShades[random.nextInt(medallionShades.size)]
+        } else {
+            val angleDegrees = Math.toDegrees(kotlin.math.atan2(dy, dx)).let {
+                if (it < 0.0) it + 360.0 else it
+            } % 360.0
+            val isArm = classifyAngle(angleDegrees, guide.armWindows) != null
+
+            if (isArm) {
+                cellColors[index] = armShades[random.nextInt(armShades.size)]
+            }
+        }
+    }
 }
 
 

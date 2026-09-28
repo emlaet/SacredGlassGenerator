@@ -3,7 +3,6 @@ import org.openrndr.color.ColorRGBa
 import org.openrndr.math.Vector2
 import org.openrndr.draw.*
 import org.openrndr.extensions.Screenshots
-import kotlin.math.sqrt
 import kotlin.random.Random
 import java.io.File
 
@@ -193,7 +192,7 @@ fun main() = application {
         // (voir MedallionMode dans Palette.kt) :
         //   MedallionMode.HOST     — toujours crème, lecture "hostie" [réglage actuel]
         //   MedallionMode.SEASONAL — cœur sombre propre à la saison active
-        val medallionMode = MedallionMode.HOST
+        val medallionMode = MedallionMode.SEASONAL
 
         val paletteFamilies = liturgicalPalette.families
         val crossMedallionShades = liturgicalPalette.medallionShades(medallionMode)
@@ -282,42 +281,19 @@ fun main() = application {
                 WeightedRandomPaletteSystem(paletteFamilies) // <-- swap ici
             val cellColors = paletteSystem.assignColors(cells, random).toMutableList()
 
-            // Post-traitement SPÉCIFIQUE à la croix rayonnante : les
-            // bras sont forcés vers crossArmShades (blanc cassé, constant
-            // selon les saisons), le médaillon vers crossMedallionShades
-            // (crème ou "cœur sombre réservé" de la saison, selon
-            // medallionMode). Sans ce forçage, un bras ou le médaillon
-            // aurait pu piocher au hasard la même famille que les rayons
-            // et se fondre dans le décor. Ce n'est pas un Système
-            // générique — c'est une signature visuelle propre à ce style
-            // de composition, donc traité ici plutôt que dans Palette.kt.
+            // Post-traitement SPÉCIFIQUE à la croix rayonnante : bras
+            // forcés en blanc cassé, médaillon selon medallionMode (voir
+            // applyRadiantCrossColors dans Palette.kt). ⚠ Consomme des
+            // tirages de random : garder cet appel à cet endroit.
             if (guide is CompositionGuide.RadiantCross) {
-
-                val coreRadius = guide.maxRadius * guide.coreRadiusRatio
-
-                cells.forEachIndexed { index, cell ->
-
-                    val centroid = polygonCentroid(cell)
-
-                    val dx = centroid.x - guide.center.x
-                    val dy = centroid.y - guide.center.y
-                    val distanceFromCenter = sqrt(dx * dx + dy * dy)
-
-                    val isMedallion = distanceFromCenter < coreRadius * 1.05
-
-                    if (isMedallion) {
-                        cellColors[index] = crossMedallionShades[random.nextInt(crossMedallionShades.size)]
-                    } else {
-                        val angleDegrees = Math.toDegrees(kotlin.math.atan2(dy, dx)).let {
-                            if (it < 0.0) it + 360.0 else it
-                        } % 360.0
-                        val isArm = classifyAngle(angleDegrees, guide.armWindows) != null
-
-                        if (isArm) {
-                            cellColors[index] = crossArmShades[random.nextInt(crossArmShades.size)]
-                        }
-                    }
-                }
+                applyRadiantCrossColors(
+                    guide = guide,
+                    cells = cells,
+                    cellColors = cellColors,
+                    armShades = crossArmShades,
+                    medallionShades = crossMedallionShades,
+                    random = random
+                )
             }
 
             // Système 4 — Plomb
