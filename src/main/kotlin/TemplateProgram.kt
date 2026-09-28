@@ -3,7 +3,6 @@ import org.openrndr.color.ColorRGBa
 import org.openrndr.math.Vector2
 import org.openrndr.draw.*
 import org.openrndr.extensions.Screenshots
-import java.io.File
 
 // --------------------------------------------------
 // PROGRAMME PRINCIPAL
@@ -18,7 +17,7 @@ import java.io.File
 // sont dans Palette.kt, après les algorithmes. La génération et le
 // dessin (renderVitrail) sont dans Renderer.kt : ce fichier construit
 // seulement la "recette" (VitrailConfig) et gère la fenêtre et les
-// touches.
+// touches. L'export haute résolution est dans Export.kt.
 //
 // Réglage actuel : Composition RadiantCross + Segmentation
 // RadiantCross + Palette aléatoire pondérée (vert, temps ordinaire)
@@ -192,7 +191,7 @@ fun main() = application {
         // (voir MedallionMode dans Palette.kt) :
         //   MedallionMode.HOST     — toujours crème, lecture "hostie" [réglage actuel]
         //   MedallionMode.SEASONAL — cœur sombre propre à la saison active
-        val medallionMode = MedallionMode.SEASONAL
+        val medallionMode = MedallionMode.HOST
 
         val paletteFamilies = liturgicalPalette.families
         val crossMedallionShades = liturgicalPalette.medallionShades(medallionMode)
@@ -305,49 +304,18 @@ fun main() = application {
         // nombres.
         val exportWidth = 3600
         val exportHeight = 2700
-        val exportPixelScale = exportWidth / width.toDouble()
 
         keyboard.keyDown.listen {
             if (it.name == "e") {
-
-                val exportTarget = renderTarget(exportWidth, exportHeight) {
-                    colorBuffer()
-                    depthBuffer()
-                }
-
-                drawer.isolatedWithTarget(exportTarget) {
-                    drawer.ortho(exportTarget)
-                    // Fond TRANSPARENT pour l'export (contrairement à
-                    // l'aperçu à l'écran, qui garde backgroundColor pour
-                    // rester lisible pendant qu'on travaille). ColorBuffer
-                    // inclut un canal alpha par défaut (RGBa 8 bits) —
-                    // confirmé par la doc officielle OpenRNDR — donc rien
-                    // d'autre à configurer : ColorRGBa.TRANSPARENT suffit,
-                    // et le PNG final aura un vrai fond transparent partout
-                    // où rien n'a été dessiné (en dehors de l'emblème).
-                    drawer.clear(ColorRGBa.TRANSPARENT)
-                    renderVitrail(
-                        drawer,
-                        config,
-                        exportWidth.toDouble(),
-                        exportHeight.toDouble(),
-                        exportPixelScale
-                    )
-                }
-
-                val exportsFolder = File("exports").absoluteFile
-                exportsFolder.mkdirs()
-
-                val fileName = "vitrail-seed${config.seed}-${System.currentTimeMillis()}.png"
-                val outputFile = exportsFolder.resolve(fileName)
-                // async = false : on attend la fin de l'écriture avant de
-                // continuer, pour pouvoir libérer exportTarget juste après
-                // sans risquer une sauvegarde encore en cours.
-                exportTarget.colorBuffer(0).saveToFile(outputFile, async = false)
-
-                exportTarget.destroy()
-
-                println("Export haute résolution enregistré : ${outputFile.absolutePath}")
+                // Voir Export.kt : rendu hors-écran à fond transparent,
+                // enregistré dans exports/vitrail-seed<seed>-<horodatage>.png
+                exportHighResolution(
+                    drawer = drawer,
+                    config = config,
+                    exportWidth = exportWidth,
+                    exportHeight = exportHeight,
+                    referenceWidth = width.toDouble()
+                )
             }
         }
 
