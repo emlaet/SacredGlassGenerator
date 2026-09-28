@@ -262,7 +262,7 @@ class CappedClusterPaletteSystem(
 
 /**
  * Détecte les cellules adjacentes (partageant une arête), via la même
- * clé d'arête que le Système 4 (edgeKey, TemplateProgram.kt).
+ * clé d'arête que le Système 4 (edgeKey, EdgeCurves.kt).
  * Utilisé par AdjacencyAwarePaletteSystem et CappedClusterPaletteSystem.
  */
 fun findAdjacentCells(
