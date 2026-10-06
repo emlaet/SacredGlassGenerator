@@ -714,3 +714,83 @@ object LiturgicalPalettes {
     /** Toutes les palettes, par exemple pour générer une série complète. */
     val ALL = listOf(ORDINAIRE, NOEL, AVENT, ROUGE, NOIRE, ROSE, MARIAL)
 }
+
+
+// --------------------------------------------------
+// CHAMP DE COULEUR PÉRIODIQUE (motif raccordable)
+// --------------------------------------------------
+
+/**
+ * Un palier d'une gamme de couleurs ordonnée du froid (temperature 0)
+ * au chaud (temperature 1), et les nuances proches tirées au hasard à
+ * ce palier.
+ */
+data class ColorRampStop(
+    val temperature: Double,
+    val shades: List<ColorRGBa>
+)
+
+object ColorRamps {
+
+    /**
+     * Arc-en-ciel du vitrail contemporain de référence (bleus profonds →
+     * turquoises → verts → jaunes → orangés → rouges → rouges profonds).
+     * Pas de blanc : Printful ne peut pas imprimer le blanc sur les
+     * produits en impression intégrale.
+     */
+    val ARC_EN_CIEL = listOf(
+        ColorRampStop(0.00, listOf(ColorRGBa.fromHex("#1B3F8F"), ColorRGBa.fromHex("#2254B5"), ColorRGBa.fromHex("#2E62C4"))), // bleus profonds
+        ColorRampStop(0.18, listOf(ColorRGBa.fromHex("#1F78B4"), ColorRGBa.fromHex("#2A86C8"), ColorRGBa.fromHex("#1C6FAE"))), // bleus moyens
+        ColorRampStop(0.33, listOf(ColorRGBa.fromHex("#1AA0B0"), ColorRGBa.fromHex("#20B2BE"), ColorRGBa.fromHex("#149AA6"))), // turquoises
+        ColorRampStop(0.47, listOf(ColorRGBa.fromHex("#1E9A6B"), ColorRGBa.fromHex("#2EAD74"), ColorRGBa.fromHex("#8DC04A"))), // verts
+        ColorRampStop(0.58, listOf(ColorRGBa.fromHex("#F2D13A"), ColorRGBa.fromHex("#E8C62A"), ColorRGBa.fromHex("#F5DD6A"))), // jaunes
+        ColorRampStop(0.70, listOf(ColorRGBa.fromHex("#F2A023"), ColorRGBa.fromHex("#EE8C1E"), ColorRGBa.fromHex("#F7B545"))), // orangés
+        ColorRampStop(0.84, listOf(ColorRGBa.fromHex("#E0421F"), ColorRGBa.fromHex("#D8361C"), ColorRGBa.fromHex("#E8552C"))), // rouges
+        ColorRampStop(1.00, listOf(ColorRGBa.fromHex("#8E1B22"), ColorRGBa.fromHex("#7A1620"), ColorRGBa.fromHex("#A02428")))  // rouges profonds
+    )
+}
+
+/**
+ * Couleurs du motif raccordable : un champ de « température » qui varie
+ * en cosinus sur la tuile (surtout verticalement, un peu
+ * horizontalement), donc PÉRIODIQUE — un bord bleu ne se heurte jamais
+ * à un bord rouge au raccord entre deux tuiles. Chaque pièce prend une
+ * nuance du palier le plus proche de la température à son centre, avec
+ * un peu de bruit (temperatureNoise) et, rarement (accentProb), la
+ * température opposée (accent contrasté, comme l'éclat rouge au milieu
+ * des bleus sur le vitrail de référence).
+ *
+ * Remplace les couleurs tirées par le PaletteSystem. ⚠ Consomme des
+ * tirages de random : à appeler au même endroit du pipeline que les
+ * autres post-traitements (voir Renderer.kt).
+ */
+fun applyPeriodicColorField(
+    guide: CompositionGuide.PeriodicShards,
+    cells: List<List<Vector2>>,
+    cellColors: MutableList<ColorRGBa>,
+    ramp: List<ColorRampStop>,
+    random: Random,
+    temperatureNoise: Double = 0.18,
+    accentProb: Double = 0.10
+) {
+
+    val phaseY = random.nextDouble(0.0, 2.0 * Math.PI)
+    val phaseX = random.nextDouble(0.0, 2.0 * Math.PI)
+
+    cells.forEachIndexed { index, cell ->
+
+        val c = polygonCentroid(cell)
+        val x = ((c.x % guide.tileWidth) + guide.tileWidth) % guide.tileWidth
+        val y = ((c.y % guide.tileHeight) + guide.tileHeight) % guide.tileHeight
+
+        var t = 0.5 +
+                0.40 * kotlin.math.cos(2.0 * Math.PI * y / guide.tileHeight + phaseY) +
+                0.10 * kotlin.math.cos(2.0 * Math.PI * x / guide.tileWidth + phaseX)
+        t += random.nextDouble(-temperatureNoise, temperatureNoise)
+        if (random.nextDouble() < accentProb) t = 1.0 - t
+        t = t.coerceIn(0.0, 1.0)
+
+        val stop = ramp.minByOrNull { kotlin.math.abs(it.temperature - t) }!!
+        cellColors[index] = stop.shades[random.nextInt(stop.shades.size)]
+    }
+}

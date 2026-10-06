@@ -1197,3 +1197,189 @@ fun generateAngelRays(
 
     return boundaries to rays
 }
+
+// --------------------------------------------------
+// MOTIF RACCORDABLE « LIGNES MAÎTRESSES + ÉCLATS »
+// --------------------------------------------------
+
+/**
+ * Zones « canoniques » découpées par les lignes maîtresses d'un motif
+ * raccordable : arrangement des lignes sur le domaine étendu
+ * [−W, 2W] × [−H, 2H] (polygonizeSegments, Arrangement.kt), dont on ne
+ * garde que les zones ayant un point intérieur dans la tuile
+ * [0, W) × [0, H). Chaque zone du motif infini est la copie translatée
+ * d'exactement une zone canonique. Utilisée par
+ * PeriodicShardsSegmentationSystem et, pour vérifier chaque nouvelle
+ * ligne maîtresse, par PeriodicShardsCompositionSystem.
+ */
+fun periodicCanonicalZones(
+    lines: List<List<Vector2>>,
+    tileW: Double,
+    tileH: Double
+): List<List<Vector2>> {
+
+    val extMinX = -tileW; val extMinY = -tileH
+    val extMaxX = 2.0 * tileW; val extMaxY = 2.0 * tileH
+
+    val segments = mutableListOf<Segment>()
+    for (line in lines) {
+        for (s in polylineSegments(line)) {
+            clipSegmentToRect(s, extMinX, extMinY, extMaxX, extMaxY)?.let { segments.add(it) }
+        }
+    }
+    segments += polygonEdgeSegments(listOf(
+        Vector2(extMinX, extMinY), Vector2(extMaxX, extMinY),
+        Vector2(extMaxX, extMaxY), Vector2(extMinX, extMaxY)
+    ))
+
+    return polygonizeSegments(segments, 1.0).filter { zone ->
+        val p = interiorPoint(zone)
+        p.x >= 0.0 && p.x < tileW && p.y >= 0.0 && p.y < tileH
+    }
+}
+
+/**
+ * Découpage du motif raccordable. Attend une
+ * CompositionGuide.PeriodicShards. Portage du prototype Python
+ * (claude/prototype_motif_raccordable.py dans les documents du projet).
+ *
+ * 1. ZONES : arrangement des lignes maîtresses sur le domaine étendu
+ *    [−W, 2W] × [−H, 2H] (polygonizeSegments, Arrangement.kt). On ne
+ *    garde que les zones « canoniques », dont un point intérieur est
+ *    dans la tuile [0, W) × [0, H) : chaque zone du motif infini est la
+ *    copie translatée d'exactement une zone canonique.
+ * 2. GESTES (rares) : dans une zone, des arcs concentriques autour d'un
+ *    de ses sommets (arcGestureProb) ou un éventail de droites partant
+ *    d'un sommet (fanGestureProb).
+ * 3. ÉCLATS : on coupe toujours la PLUS GRANDE pièce restante de la
+ *    zone, par une droite passant par un point tiré à l'intérieur,
+ *    jusqu'à un nombre de pièces proportionnel à l'aire de la zone
+ *    (pieceAreaRatio de la tuile par pièce). Couper une seule pièce à la
+ *    fois crée des jonctions en T (une coupe s'arrête sur une autre),
+ *    comme sur un vrai vitrail. Une coupe est refusée si elle crée une
+ *    pièce plus petite que minPieceRatio de la tuile, trop allongée
+ *    (compacité 4πA/P² < minCompactness), ou qu'un verrier ne pourrait
+ *    pas couper : une partie où ne passe pas un disque de diamètre
+ *    minWidthRatio × (petit côté de la tuile) — pointe très aiguë,
+ *    lanière, goulet (voir narrowResidueCells, Arrangement.kt).
+ *    Le même contrôle s'applique aux gestes (arcs, éventails) : un arc
+ *    presque tangent à un plomb est interrompu plutôt que de laisser
+ *    une lanière de verre.
+ *
+ * Les cellules renvoyées sont les pièces canoniques ; elles peuvent
+ * dépasser du bord de la tuile. Voir renderVitrail pour leur
+ * répétition aux 9 positions.
+ *
+ * ⚠ Les jonctions en T laissent, sur l'arête de la pièce voisine, un
+ * point qui n'est pas un de ses sommets : avec des plombs COURBES, les
+ * deux côtés seraient dessinés avec des courbures différentes. Cette
+ * famille s'utilise donc avec curvatureAmount = 0 (plombs droits,
+ * superposés exactement).
+ */
+class PeriodicShardsSegmentationSystem : SegmentationSystem {
+
+    override fun segment(
+        guide: CompositionGuide,
+        width: Double,
+        height: Double,
+        random: Random
+    ): List<List<Vector2>> {
+
+        require(guide is CompositionGuide.PeriodicShards) {
+            "PeriodicShardsSegmentationSystem nécessite une CompositionGuide.PeriodicShards"
+        }
+
+        val tileW = guide.tileWidth
+        val tileH = guide.tileHeight
+        val tileArea = tileW * tileH
+
+        // --- 1. Zones canoniques
+        val zones = periodicCanonicalZones(guide.primaryLines, tileW, tileH)
+        // (déjà triées par polygonizeSegments, indépendamment de l'échelle :
+        // l'ordre des zones fixe l'ordre des tirages aléatoires qui suivent,
+        // il doit être le même à l'aperçu et à l'export)
+
+        val minPieceArea = guide.minPieceRatio * tileArea
+        val narrowRadius = 0.5 * guide.minWidthRatio * kotlin.math.min(tileW, tileH)
+        val pieces = mutableListOf<List<Vector2>>()
+
+        // Résidu étroit de chaque pièce (calculé une fois par pièce).
+        val residueCache = java.util.IdentityHashMap<List<Vector2>, Set<Long>>()
+        fun residueOf(piece: List<Vector2>) =
+            residueCache.getOrPut(piece) { narrowResidueCells(piece, narrowRadius) }
+
+        // Une coupe de `parent` en `parts` est acceptée si aucune partie
+        // n'est trop petite, et si la coupe ne crée aucune partie trop
+        // étroite (pointe effilée, lanière, goulet : voir
+        // narrowResidueCells, Arrangement.kt).
+        fun cutIsCraftable(parent: List<Vector2>, parts: List<List<Vector2>>): Boolean {
+            if (parts.size < 2) return false
+            if (parts.any { polygonAreaAbs(it) < minPieceArea }) return false
+            val parentResidue = residueOf(parent)
+            return parts.all { newNarrowResidue(it, parentResidue, narrowRadius) <= guide.maxNarrowResidue }
+        }
+
+        fun acceptable(parent: List<Vector2>, parts: List<List<Vector2>>) =
+            cutIsCraftable(parent, parts) &&
+                    parts.all { polygonCompactnessRatio(it) >= guide.minCompactness }
+
+        for (zone in zones) {
+
+            var parts = mutableListOf(zone)
+            val zb = polygonBounds(zone)
+            val diagonal = kotlin.math.hypot(zb[2] - zb[0], zb[3] - zb[1])
+
+            // --- 2. Gestes
+            val gesture = random.nextDouble()
+            val gestureCuts = mutableListOf<List<Vector2>>()
+            if (gesture < guide.arcGestureProb) {
+                val v = zone[random.nextInt(zone.size)]
+                val count = random.nextInt(2, 5)
+                for (k in 1..count) gestureCuts.add(circlePoints(v, diagonal * 0.18 * k, 90))
+            } else if (gesture < guide.arcGestureProb + guide.fanGestureProb) {
+                val v = zone[random.nextInt(zone.size)]
+                val a0 = random.nextDouble(0.0, 2.0 * Math.PI)
+                var a = a0
+                repeat(random.nextInt(3, 6)) {
+                    gestureCuts.add(listOf(v, Vector2(v.x + kotlin.math.cos(a) * diagonal * 2.0, v.y + kotlin.math.sin(a) * diagonal * 2.0)))
+                    a += random.nextDouble(0.25, 0.45)
+                }
+            }
+            for (cut in gestureCuts) {
+                val next = mutableListOf<List<Vector2>>()
+                for (part in parts) {
+                    val split = splitPolygonByPolyline(part, cut)
+                    if (cutIsCraftable(part, split)) next.addAll(split) else next.add(part)
+                }
+                parts = next
+            }
+
+            // --- 3. Éclats
+            val target = kotlin.math.max(1, Math.round(polygonAreaAbs(zone) / (guide.pieceAreaRatio * tileArea)).toInt())
+            var attempts = 0
+            while (parts.size < target && attempts < 40) {
+                attempts++
+                parts.sortBy { polygonAreaAbs(it) }
+                val big = parts.last()
+                val bb = polygonBounds(big)
+                val bd = kotlin.math.hypot(bb[2] - bb[0], bb[3] - bb[1])
+                var point: Vector2? = null
+                for (tries in 0 until 20) {
+                    val q = Vector2(random.nextDouble(bb[0], bb[2]), random.nextDouble(bb[1], bb[3]))
+                    if (polygonContains(big, q)) { point = q; break }
+                }
+                if (point == null) continue
+                val angle = random.nextDouble(0.0, Math.PI)
+                val dx = kotlin.math.cos(angle) * bd * 2.0
+                val dy = kotlin.math.sin(angle) * bd * 2.0
+                val split = splitPolygonByPolyline(big, listOf(Vector2(point.x - dx, point.y - dy), Vector2(point.x + dx, point.y + dy)))
+                if (!acceptable(big, split)) continue
+                parts = (parts.dropLast(1) + split).toMutableList()
+            }
+
+            pieces.addAll(parts.sortedWith(compareBy({ polygonCentroid(it).y }, { polygonCentroid(it).x })))
+        }
+
+        return pieces
+    }
+}

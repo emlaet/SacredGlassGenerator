@@ -19,7 +19,18 @@ import org.openrndr.extensions.Screenshots
 // seulement la "recette" (VitrailConfig) et gère la fenêtre et les
 // touches. L'export haute résolution est dans Export.kt.
 //
-// Réglage actuel : Composition RadiantAngel + Segmentation
+// Réglage actuel : MOTIF RACCORDABLE FLEURS DU SOUVENIR
+// (Toussaint, défunts — voir souvenirRecipe et activeConfig plus bas, et
+// Botanical.kt ; touche « r » : aperçu répété 2 × 2). Même famille :
+// perce-neige (Noire, snowdropRecipe) ; églantines (Rose, roseRecipe) ; lys blancs (Pâques, easterRecipe) ; passiflores, roses rouges et palmes (Rouge, redRecipe) ;
+// branche de Jessé
+// (Avent, adventRecipe) ; roses de Noël et houx
+// (blanc et or, noelRecipe) ; lys, rose et iris
+// (palette mariale, marianRecipe) ; vigne et blé (Temps ordinaire,
+// vineRecipe) ; motif floral : tulipes, coquelicots (botanicalRecipe).
+// Autre motif raccordable disponible : « lignes maîtresses + éclats »
+// (periodicShardsRecipe). Recette de base (config), toujours disponible :
+// Composition RadiantAngel + Segmentation
 // RadiantAngel + Palette aléatoire pondérée (vert, temps ordinaire)
 // + Basic (plomb noir simple) + Procedural (avec lumière globale +
 // opalescence), variante « robe liturgique » (sans rayons de lumière,
@@ -92,7 +103,7 @@ fun main() = application {
         // PARAMÈTRES
         // ------------------------
 
-        val seed = 123
+        val seed = 31051985
         // Random(seed) est recréé à chaque appel de renderVitrail() (voir
         // Renderer.kt), jamais gardé ici — l'aperçu et l'export produisent
         // ainsi exactement le même motif.
@@ -201,7 +212,7 @@ fun main() = application {
         //   LiturgicalPalettes.NOIRE     — noir, funérailles (facultatif)
         //   LiturgicalPalettes.ROSE      — rose, Gaudete/Laetare
         //   LiturgicalPalettes.MARIAL    — bleu marial (privilège régional, PAS une des six couleurs universelles)
-        val liturgicalPalette = LiturgicalPalettes.MARIAL
+        val liturgicalPalette = LiturgicalPalettes.ORDINAIRE
 
         // <-- swap ici : teinte du MÉDAILLON, indépendante de la saison
         // (voir MedallionMode dans Palette.kt) :
@@ -338,6 +349,146 @@ fun main() = application {
             angelChestShades = liturgicalPalette.seasonalMedallionShades
         )
 
+        // Motif RACCORDABLE « lignes maîtresses + éclats » (impression
+        // intégrale sur textile) : même recette de base, mais avec sa
+        // composition et sa segmentation, des plombs droits (curvature 0 :
+        // indispensable avec les jonctions en T — voir
+        // PeriodicShardsSegmentationSystem) et sans dégradé de lumière
+        // global (il créerait une rupture de luminosité au raccord entre
+        // deux tuiles), plombs à extrémités rondes. Couleurs : champ
+        // périodique « arc-en-ciel » (ColorRamps.ARC_EN_CIEL, Palette.kt).
+        // La tuile a la taille du canevas : 768 × 576 à l'aperçu,
+        // exportWidth × exportHeight à l'export (touche « e »).
+        val periodicShardsRecipe = config.copy(
+            compositionSystem = PeriodicShardsCompositionSystem(),
+            segmentationSystem = PeriodicShardsSegmentationSystem(),
+            curvatureAmount = 0.0,
+            glassStyle = config.glassStyle.copy(globalLightStrength = 0.0),
+            // Extrémités rondes : les arcs sont faits de nombreuses petites
+            // arêtes, et avec des extrémités droites leurs jonctions
+            // laissaient des stries claires dans le plomb (voir
+            // LeadStyle.lineCap, Leading.kt).
+            leadStyle = config.leadStyle.copy(lineCap = LineCap.ROUND)
+        )
+
+        // Motif raccordable VÉGÉTAL, tout en courbes (Botanical.kt) : tige
+        // ondulante, feuilles, tulipes, coquelicots, parfois une rosace,
+        // boutons ; fond découpé par des ponts courbes. Comme le motif en
+        // éclats : arêtes droites (courbes échantillonnées, curvature 0),
+        // plombs à extrémités rondes, pas de dégradé de lumière global.
+        // numberOfSites n'est pas utilisé par cette famille.
+        val botanicalRecipe = config.copy(
+            compositionSystem = BotanicalCompositionSystem(),
+            segmentationSystem = BotanicalSegmentationSystem(),
+            curvatureAmount = 0.0,
+            glassStyle = config.glassStyle.copy(globalLightStrength = 0.0),
+            leadStyle = config.leadStyle.copy(lineCap = LineCap.ROUND),
+            // <-- swap ici : palette du végétal
+            //   BotanicalPalettes.PRINTEMPS   — ciel pâle, rose et jaune [réglage actuel]
+            //   BotanicalPalettes.ART_NOUVEAU — ambre, olive, bordeaux et violet
+            //   BotanicalPalettes.NUIT        — bleu nuit, sauge, ambre et or
+            //   BotanicalPalettes.fromLiturgical(LiturgicalPalettes.AVENT) — etc.
+            botanicalPalette = BotanicalPalettes.PRINTEMPS
+        )
+
+        // Motif raccordable VIGNE ET BLÉ — Temps ordinaire (Atelier Arcana) :
+        // cep de vigne, feuilles de vigne, grappes de raisin, épis de blé
+        // (le pain et le vin de l'Eucharistie). Barbes du blé et vrilles de
+        // la vigne peintes à la grisaille (traits fins sur le verre).
+        val vineRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.VIGNE_BLE),
+            botanicalPalette = BotanicalPalettes.VIGNE_ORDINAIRE
+        )
+
+        // Motif raccordable LYS, ROSE ET IRIS — palette mariale (Atelier
+        // Arcana) : lys (pureté, Annonciation), rose (« Rosa mystica »),
+        // iris (douleurs de Marie). Étamines du lys et veines de l'iris
+        // peintes à la grisaille.
+        val marianRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.MARIAL),
+            botanicalPalette = BotanicalPalettes.MARIAL_FLEURS
+        )
+
+        // Motif raccordable ROSES DE NOËL ET HOUX — blanc et or (Atelier
+        // Arcana) : hellébores (Nativité), houx et baies rouges (souvent
+        // lus comme annonce de la Passion). Étamines et nervures des
+        // hellébores peintes à la grisaille.
+        val noelRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.NOEL),
+            botanicalPalette = BotanicalPalettes.NOEL_FLEURS
+        )
+
+        // Motif raccordable BRANCHE DE JESSÉ — Avent (violet, Atelier
+        // Arcana) : vieux bois taillé (la souche) d'où repartent de jeunes
+        // feuilles, roses de Noël encore en bouton — l'attente, « un rameau
+        // sortira de la souche de Jessé » (Is 11, 1).
+        val adventRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.AVENT),
+            botanicalPalette = BotanicalPalettes.AVENT_FLEURS
+        )
+
+        // Motif raccordable PASSIFLORES, ROSES ROUGES ET PALMES — Rouge
+        // (Passion, martyrs ; Atelier Arcana) : la Passion, le sang des
+        // martyrs, la palme du martyre ; tige épineuse (épines, filaments
+        // de la passiflore peints à la grisaille).
+        val redRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.ROUGE),
+            botanicalPalette = BotanicalPalettes.ROUGE_FLEURS
+        )
+
+        // Motif raccordable LYS BLANCS — Pâques (blanc et or, Résurrection ;
+        // Atelier Arcana) : grands lys de la Madone dressés, boutons encore
+        // fermés, feuilles lancéolées, sur un fond d'or lumineux.
+        val easterRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.PAQUES),
+            botanicalPalette = BotanicalPalettes.PAQUES_FLEURS
+        )
+
+        // Motif raccordable ÉGLANTINES — Rose (Gaudete, Laetare ; Atelier
+        // Arcana) : roses sauvages épanouies parmi des boutons encore
+        // fermés, la joie au cœur de l'attente ; fond rose liturgique.
+        val roseRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.ROSE),
+            botanicalPalette = BotanicalPalettes.ROSE_FLEURS
+        )
+
+        // Motif raccordable PERCE-NEIGE — Noire (défunts, funérailles ;
+        // Atelier Arcana) : touffes de perce-neige sortant d'un sol enneigé,
+        // fleurs pendantes au bout de hampes recourbées ; la lumière qui
+        // perce l'hiver. Fond anthracite et ardoise, sans or.
+        val snowdropRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.NOIRE),
+            botanicalPalette = BotanicalPalettes.NOIRE_FLEURS
+        )
+
+        // Motif raccordable FLEURS DU SOUVENIR — Toussaint et commémoration
+        // des défunts (Atelier Arcana) : pavot somnifère et sa capsule (le
+        // sommeil des défunts), chrysanthèmes ivoire et bronze, cempasúchil
+        // (Día de Muertos). Fond anthracite ; les fleurs gardent leurs couleurs.
+        val souvenirRecipe = botanicalRecipe.copy(
+            compositionSystem = BotanicalCompositionSystem(motif = BotanicalMotif.SOUVENIR),
+            botanicalPalette = BotanicalPalettes.TOUSSAINT_FLEURS
+        )
+
+        // <-- swap ici : recette affichée et exportée.
+        //   souvenirRecipe       — pavot, chrysanthème, cempasúchil (Toussaint) [réglage actuel]
+        //   snowdropRecipe       — perce-neige, Noire (défunts)
+        //   roseRecipe           — églantines, Rose (Gaudete, Laetare)
+        //   easterRecipe         — lys blancs, Pâques (blanc et or)
+        //   redRecipe            — passiflores, roses et palmes, Rouge
+        //   adventRecipe         — branche de Jessé, Avent (violet)
+        //   noelRecipe           — roses de Noël et houx, blanc et or
+        //   marianRecipe         — lys, rose et iris, palette mariale
+        //   vineRecipe           — vigne et blé, Temps ordinaire
+        //   botanicalRecipe      — motif raccordable floral
+        //   periodicShardsRecipe — motif raccordable en éclats
+        //   config               — ange (ou croix) défini ci-dessus
+        val activeConfig = souvenirRecipe
+
+        // Aperçu répété 2 × 2 (touche « r ») : pour vérifier le raccord
+        // du motif. Chaque quart affiche la tuile entière, réduite.
+        var previewRepeat = false
+
         // ------------------------
         // EXPORT
         // ------------------------
@@ -363,12 +514,15 @@ fun main() = application {
         val exportHeight = 2700
 
         keyboard.keyDown.listen {
+            if (it.name == "r") {
+                previewRepeat = !previewRepeat
+            }
             if (it.name == "e") {
                 // Voir Export.kt : rendu hors-écran à fond transparent,
                 // enregistré dans exports/vitrail-seed<seed>-<horodatage>.png
                 exportHighResolution(
                     drawer = drawer,
-                    config = config,
+                    config = activeConfig,
                     exportWidth = exportWidth,
                     exportHeight = exportHeight,
                     referenceWidth = width.toDouble()
@@ -381,8 +535,19 @@ fun main() = application {
         // ------------------------
 
         extend {
-            drawer.clear(config.backgroundColor)
-            renderVitrail(drawer, config, width.toDouble(), height.toDouble(), 1.0)
+            drawer.clear(activeConfig.backgroundColor)
+            if (previewRepeat) {
+                val halfW = width / 2.0
+                val halfH = height / 2.0
+                for (i in 0..1) for (j in 0..1) {
+                    drawer.isolated {
+                        drawer.translate(i * halfW, j * halfH)
+                        renderVitrail(drawer, activeConfig, halfW, halfH, 0.5)
+                    }
+                }
+            } else {
+                renderVitrail(drawer, activeConfig, width.toDouble(), height.toDouble(), 1.0)
+            }
         }
     }
 }

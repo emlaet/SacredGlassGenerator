@@ -191,6 +191,35 @@ sealed class CompositionGuide {
         val robeUsesPalette: Boolean
     ) : CompositionGuide()
 
+    /**
+     * Vitrail « lignes maîtresses + éclats » en MOTIF RACCORDABLE : la
+     * tuile tileWidth × tileHeight se répète sans raccord visible dans
+     * les deux directions (pour l'impression intégrale sur textile).
+     *
+     * primaryLines : lignes maîtresses (plomb épais), déjà recopiées sur
+     * le domaine étendu [−W, 2W] × [−H, 2H] pour que la géométrie soit
+     * périodique. Les autres champs règlent le découpage en éclats (voir
+     * PeriodicShardsSegmentationSystem, Segmentation.kt).
+     *
+     * ⚠ Les cellules produites par la segmentation sont les pièces
+     * « canoniques » de la tuile : renderVitrail (Renderer.kt) les
+     * dessine aux 9 positions (tuile et ses 8 voisines) avec la MÊME
+     * couleur et la même matière, pour que les pièces coupées par le bord
+     * de la tuile se raccordent exactement.
+     */
+    data class PeriodicShards(
+        val tileWidth: Double,
+        val tileHeight: Double,
+        val primaryLines: List<List<Vector2>>,
+        val pieceAreaRatio: Double,
+        val minPieceRatio: Double,
+        val minCompactness: Double,
+        val minWidthRatio: Double,
+        val maxNarrowResidue: Double,
+        val arcGestureProb: Double,
+        val fanGestureProb: Double
+    ) : CompositionGuide()
+
     // À venir : Botanical(troncs, branches, ...), Symmetric(axes, ...), etc.
 }
 
@@ -638,3 +667,243 @@ class RadiantAngelCompositionSystem(
         )
     }
 }
+
+/**
+ * Composition « lignes maîtresses + éclats » en MOTIF RACCORDABLE
+ * (voir CompositionGuide.PeriodicShards) : produit les lignes maîtresses
+ * périodiques, déjà recopiées sur le domaine étendu [−W, 2W] × [−H, 2H]
+ * (W × H = taille de la tuile = taille du canevas).
+ *
+ * Réglages par défaut = variante « A » retenue sur le prototype Python
+ * (lignes quasi droites, jugées plus « vitrail » que les grandes
+ * courbes) :
+ * - horizontalWaves / verticalWaves : ondulations très douces qui
+ *   traversent toute la tuile (une seule ondulation par largeur de
+ *   tuile : waveHarmonics = [1]) ; amplitude entre waveAmplitudeMin et
+ *   waveAmplitudeMax, en part de la hauteur (ou largeur) de la tuile ;
+ * - diagonalLines : droites en diagonale qui montent (ou descendent)
+ *   d'une hauteur de tuile quand elles avancent d'une largeur — seule
+ *   pente qui se raccorde exactement d'une tuile à l'autre ;
+ * - circles : grands cercles (0 par défaut ; 1 avec un rayon de 0,45 à
+ *   0,5 × W donnait la variante « B », à grands arcs).
+ * - minLineSpacing : écart minimal entre deux lignes maîtresses
+ *   PARALLÈLES (deux ondulations horizontales, deux verticales, ou deux
+ *   diagonales de même pente), en part de la tuile, mesuré de façon
+ *   périodique (au raccord aussi). Sans lui, deux lignes tirées presque
+ *   au même endroit enfermaient une bande de verre très étroite sur
+ *   toute la longueur du motif. Une ligne trop proche est simplement
+ *   retirée : si le premier tirage convient, rien ne change par rapport
+ *   à la version sans écart minimal (mêmes tirages aléatoires).
+ * - pièces réalisables par un verrier (règles appliquées aux zones
+ *   découpées par les lignes maîtresses comme aux éclats) :
+ *   minPieceRatio = aire minimale d'une pièce (part de la tuile) ;
+ *   minWidthRatio = largeur minimale, en part du petit côté de la tuile
+ *   (diamètre d'un disque qui doit pouvoir atteindre toute la pièce :
+ *   pas de lanière ni de goulet plus étroits) ; maxNarrowResidue et
+ *   maxZoneNarrowResidue = tolérance aux pointes aiguës (2 r² ≈ 35° pour
+ *   les éclats, 3,5 r² ≈ 24° pour les zones). Voir narrowResidueCells
+ *   (Arrangement.kt).
+ * Les réglages des éclats (pieceAreaRatio, etc.) sont transmis tels
+ * quels à PeriodicShardsSegmentationSystem.
+ */
+class PeriodicShardsCompositionSystem(
+    private val horizontalWaves: Int = 2,
+    private val verticalWaves: Int = 2,
+    private val diagonalLines: Int = 2,
+    private val circles: Int = 0,
+    private val waveAmplitudeMin: Double = 0.015,
+    private val waveAmplitudeMax: Double = 0.04,
+    private val waveHarmonics: List<Int> = listOf(1),
+    private val circleRadiusMin: Double = 0.45,
+    private val circleRadiusMax: Double = 0.50,
+    private val waveSamplesPerTile: Int = 60,
+    private val pieceAreaRatio: Double = 1.0 / 45.0,
+    private val minPieceRatio: Double = 0.006,
+    private val minCompactness: Double = 0.18,
+    private val minWidthRatio: Double = 0.07,
+    private val maxNarrowResidue: Double = 2.0,
+    private val maxZoneNarrowResidue: Double = 3.5,
+    private val arcGestureProb: Double = 0.05,
+    private val fanGestureProb: Double = 0.10,
+    private val minLineSpacing: Double = 0.18
+) : CompositionSystem {
+
+    override fun generate(
+        width: Double,
+        height: Double,
+        targetRegions: Int,
+        random: Random
+    ): CompositionGuide {
+
+        val lines = mutableListOf<List<Vector2>>()
+
+        // Écart périodique entre deux positions, en part de la période
+        // (0 = confondues, 0.5 = le plus loin possible).
+        fun periodicGap(a: Double, b: Double): Double {
+            val d = ((a - b) % 1.0 + 1.0) % 1.0
+            return kotlin.math.min(d, 1.0 - d)
+        }
+        val maxRedraws = 100
+        val maxZoneRedraws = 30
+
+        // Les zones découpées par les lignes maîtresses doivent elles
+        // aussi pouvoir être coupées par un verrier : pas de zone plus
+        // petite qu'une pièce (minPieceRatio), pas de pointe plus effilée
+        // qu'environ 24° (maxZoneNarrowResidue = 3,5 r² ; voir
+        // narrowResidueCells, Arrangement.kt). Le seuil est plus
+        // tolérant que pour les éclats (2 r², environ 35°), car une
+        // diagonale croise une ondulation horizontale sous un angle de
+        // 25 à 45° environ : c'est le dessin voulu. Ce contrôle écarte
+        // surtout les lignes qui passent presque par un croisement
+        // existant (minuscule triangle de verre).
+        // Vérifié à chaque nouvelle ligne ; une ligne qui crée une zone
+        // impossible est retirée au hasard (au plus maxZoneRedraws fois,
+        // puis abandonnée).
+        val narrowRadius = 0.5 * minWidthRatio * kotlin.math.min(width, height)
+        fun zonesAreCraftable(candidateLines: List<List<Vector2>>): Boolean =
+            periodicCanonicalZones(candidateLines, width, height).all { zone ->
+                polygonAreaAbs(zone) >= minPieceRatio * width * height &&
+                        newNarrowResidue(zone, emptySet(), narrowRadius) <= maxZoneNarrowResidue
+            }
+
+        // Positions (en part de la tuile) des lignes déjà placées, par
+        // famille de lignes parallèles.
+        val horizontalProfiles = mutableListOf<DoubleArray>()
+        val verticalProfiles = mutableListOf<DoubleArray>()
+        val risingIntercepts = mutableListOf<Double>()
+        val fallingIntercepts = mutableListOf<Double>()
+
+        fun wave(horizontal: Boolean): List<Vector2> {
+            val along = if (horizontal) width else height
+            val across = if (horizontal) height else width
+            val placed = if (horizontal) horizontalProfiles else verticalProfiles
+
+            fun offsetAt(components: List<Triple<Int, Double, Double>>, s: Double) =
+                components.sumOf { (k, a, phase) -> a * kotlin.math.sin(2.0 * Math.PI * k * s / along + phase) }
+
+            var base: Double
+            var components: List<Triple<Int, Double, Double>>
+            var profile: DoubleArray
+            var redraws = 0
+            while (true) {
+                base = random.nextDouble(0.0, across)
+                components = (0 until 2).map {
+                    val k = waveHarmonics[random.nextInt(waveHarmonics.size)]
+                    val amplitude = random.nextDouble(waveAmplitudeMin, waveAmplitudeMax) * across / (if (k == 1) 1.0 else 2.0)
+                    Triple(k, amplitude, random.nextDouble(0.0, 2.0 * Math.PI))
+                }
+                // Position de l'ondulation (en part de la tuile) le long
+                // d'une période : deux ondulations parallèles doivent rester
+                // à minLineSpacing l'une de l'autre sur TOUTE leur longueur,
+                // pas seulement en moyenne (elles peuvent se rapprocher là où
+                // l'une monte et l'autre descend).
+                val c = components
+                val b = base
+                profile = DoubleArray(waveSamplesPerTile) { i ->
+                    (b + offsetAt(c, along * i / waveSamplesPerTile)) / across
+                }
+                val p = profile
+                val farEnough = placed.all { other ->
+                    p.indices.all { i -> periodicGap(other[i], p[i]) >= minLineSpacing }
+                }
+                if (farEnough || redraws >= maxRedraws) break
+                redraws++
+            }
+            placed.add(profile)
+            val samples = 3 * waveSamplesPerTile
+            return (0..samples).map { i ->
+                val s = -along + 3.0 * along * i / samples
+                val offset = offsetAt(components, s)
+                if (horizontal) Vector2(s, base + offset) else Vector2(base + offset, s)
+            }
+        }
+
+        for (horizontal in List(horizontalWaves) { true } + List(verticalWaves) { false }) {
+            var zoneRedraws = 0
+            while (true) {
+                val w = wave(horizontal)
+                val copies = (-1..1).map { k ->
+                    if (horizontal) w.map { Vector2(it.x, it.y + k * height) }
+                    else w.map { Vector2(it.x + k * width, it.y) }
+                }
+                if (zonesAreCraftable(lines + copies)) {
+                    lines.addAll(copies)
+                    break
+                }
+                // ligne retirée : on oublie aussi sa position
+                val placed = if (horizontal) horizontalProfiles else verticalProfiles
+                placed.removeAt(placed.lastIndex)
+                zoneRedraws++
+                // Aucune position ne convient : la ligne est abandonnée
+                // (mieux vaut une ligne de moins qu'une pièce impossible).
+                if (zoneRedraws >= maxZoneRedraws) break
+            }
+        }
+        repeat(diagonalLines) {
+            var zoneRedraws = 0
+            while (true) {
+                var slopeSign: Double
+                var x0: Double
+                var y0: Double
+                var intercept: Double
+                var redraws = 0
+                while (true) {
+                    slopeSign = if (random.nextBoolean()) 1.0 else -1.0
+                    x0 = random.nextDouble(0.0, width)
+                    y0 = random.nextDouble(0.0, height)
+                    // Ordonnée à l'origine, en part de la hauteur : deux
+                    // diagonales de même pente sont parallèles, et leur écart
+                    // est celui de leurs ordonnées à l'origine (modulo H).
+                    intercept = (y0 - slopeSign * height * x0 / width) / height
+                    val placed = if (slopeSign > 0.0) risingIntercepts else fallingIntercepts
+                    if (redraws >= maxRedraws || placed.none { periodicGap(it, intercept) < minLineSpacing }) {
+                        placed.add(intercept)
+                        break
+                    }
+                    redraws++
+                }
+                val copies = (-3..3).map { k ->
+                    listOf(-2.0 * width, 3.0 * width).map { x ->
+                        Vector2(x, y0 + k * height + slopeSign * height * (x - x0) / width)
+                    }
+                }
+                if (zonesAreCraftable(lines + copies)) {
+                    lines.addAll(copies)
+                    break
+                }
+                val placed = if (slopeSign > 0.0) risingIntercepts else fallingIntercepts
+                placed.removeAt(placed.lastIndex)
+                zoneRedraws++
+                if (zoneRedraws >= maxZoneRedraws) break
+            }
+        }
+        repeat(circles) {
+            val cx = random.nextDouble(0.0, width)
+            val cy = random.nextDouble(0.0, height)
+            val r = random.nextDouble(circleRadiusMin, circleRadiusMax) * width
+            for (dx in -1..1) for (dy in -1..1) {
+                lines.add(circlePoints(Vector2(cx + dx * width, cy + dy * height), r, 180))
+            }
+        }
+
+        return CompositionGuide.PeriodicShards(
+            tileWidth = width,
+            tileHeight = height,
+            primaryLines = lines,
+            pieceAreaRatio = pieceAreaRatio,
+            minPieceRatio = minPieceRatio,
+            minCompactness = minCompactness,
+            minWidthRatio = minWidthRatio,
+            maxNarrowResidue = maxNarrowResidue,
+            arcGestureProb = arcGestureProb,
+            fanGestureProb = fanGestureProb
+        )
+    }
+}
+
+/** Cercle approché par n segments (polyligne fermée : dernier point = premier). */
+fun circlePoints(center: Vector2, radius: Double, n: Int): List<Vector2> =
+    (0..n).map { i ->
+        val a = 2.0 * Math.PI * (i % n) / n
+        Vector2(center.x + kotlin.math.cos(a) * radius, center.y + kotlin.math.sin(a) * radius)
+    }
