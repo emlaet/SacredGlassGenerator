@@ -19,9 +19,10 @@ import org.openrndr.extensions.Screenshots
 // seulement la "recette" (VitrailConfig) et gère la fenêtre et les
 // touches. L'export haute résolution est dans Export.kt.
 //
-// Réglage actuel : MOTIF RACCORDABLE FLEURS DU SOUVENIR
-// (Toussaint, défunts — voir souvenirRecipe et activeConfig plus bas, et
-// Botanical.kt ; touche « r » : aperçu répété 2 × 2). Même famille :
+// Réglage actuel : BAIE EN ARC BRISÉ avec croix rayonnante (format
+// 2:3, pour les tirages muraux — voir crossBayRecipe, angelBayRecipe et
+// Bay.kt). Motifs raccordables : fleurs du souvenir (Toussaint,
+// souvenirRecipe, Botanical.kt ; touche « r » : aperçu répété 2 × 2) ;
 // perce-neige (Noire, snowdropRecipe) ; églantines (Rose, roseRecipe) ; lys blancs (Pâques, easterRecipe) ; passiflores, roses rouges et palmes (Rouge, redRecipe) ;
 // branche de Jessé
 // (Avent, adventRecipe) ; roses de Noël et houx
@@ -103,7 +104,7 @@ fun main() = application {
         // PARAMÈTRES
         // ------------------------
 
-        val seed = 31051985
+        val seed = 123
         // Random(seed) est recréé à chaque appel de renderVitrail() (voir
         // Renderer.kt), jamais gardé ici — l'aperçu et l'export produisent
         // ainsi exactement le même motif.
@@ -212,7 +213,7 @@ fun main() = application {
         //   LiturgicalPalettes.NOIRE     — noir, funérailles (facultatif)
         //   LiturgicalPalettes.ROSE      — rose, Gaudete/Laetare
         //   LiturgicalPalettes.MARIAL    — bleu marial (privilège régional, PAS une des six couleurs universelles)
-        val liturgicalPalette = LiturgicalPalettes.ORDINAIRE
+        val liturgicalPalette = LiturgicalPalettes.MARIAL
 
         // <-- swap ici : teinte du MÉDAILLON, indépendante de la saison
         // (voir MedallionMode dans Palette.kt) :
@@ -221,6 +222,9 @@ fun main() = application {
         // (Croix rayonnante uniquement : l'ange a toujours une poitrine
         // sombre de la saison et une tête claire — voir angelChestShades
         // dans la recette ci-dessous.)
+        // ATTENTION : ce réglage ne vaut que pour les recettes SANS baie.
+        // La croix en baie (crossBayRecipe, plus bas) a son propre réglage,
+        // crossMedallionMode, qui remplace celui-ci.
         val medallionMode = MedallionMode.HOST
 
         val paletteFamilies = liturgicalPalette.families
@@ -308,10 +312,18 @@ fun main() = application {
             // Trait noir simple, sans reflet — préférence confirmée
             // après test du reflet décalé (jugé moins bon que le simple
             // trait noir).
+            // Extrémités RONDES (LineCap.ROUND) : les cercles et les arcs
+            // (nimbe et tête de l'ange, médaillon de la croix, arc de la
+            // baie) sont faits de nombreuses petites arêtes, tracées une à
+            // une ; avec des extrémités droites (BUTT), leurs jonctions
+            // laissaient des encoches claires et le plomb paraissait
+            // pointillé. Une extrémité ronde recouvre chaque jonction,
+            // comme une soudure d'étain (voir LeadStyle.lineCap, Leading.kt).
             leadSystem = BasicLeadSystem(),
             leadStyle = LeadStyle(
                 width = strokeWeight,
-                color = strokeColor
+                color = strokeColor,
+                lineCap = LineCap.ROUND
             ),
 
             // Système 5 — Verre
@@ -470,8 +482,82 @@ fun main() = application {
             botanicalPalette = BotanicalPalettes.TOUSSAINT_FLEURS
         )
 
+        // BAIES EN ARC (Bay.kt) — panneaux non raccordables au format 2:3,
+        // pour les tirages muraux : bordure de verre qui suit l'arc (pièces
+        // alternées : couleur principale de la saison et or), fond en
+        // losanges (sombre et désaturé), une barlotière
+        // (barres de fer horizontales). La composition est générée dans la
+        // fenêtre avec les mêmes tirages que sans baie.
+        // Arc : ArchShape.POINTED (brisé, gothique) ou ArchShape.ROUND
+        // (plein cintre, roman). Pour la palette noire, préférer un accent
+        // argent : BayStyle.forLiturgical(LiturgicalPalettes.NOIRE,
+        // ArchShape.POINTED, accent = listOf(ColorRGBa.fromHex("#A6A6A8"))).
+        // Le fond en losanges est sombre et désaturé par défaut ;
+        // QuarryTone.CLEAR donne une vitrerie claire (verre pâle, la
+        // convention des vitreries), QuarryTone.DARK un fond sombre.
+        // Fond : sombre et désaturé par défaut (QuarryTone.MUTED : la
+        // couleur de la saison, assombrie et grisée), pour que la croix
+        // blanche se lise comme une croix de lumière ; vitrerie claire avec
+        // QuarryTone.CLEAR, fond sombre de la palette avec QuarryTone.DARK.
+        // Rayons : seulement les familles assez contrastées avec ce fond
+        // (raysFamiliesFor, Bay.kt).
+        // Médaillon : couleur de la saison (MedallionMode.PALETTE) ou crème,
+        // lecture « hostie » (MedallionMode.HOST) — voir Palette.kt.
+        // <-- swap ici : bordure de la baie (croix et ange) :
+        //   BorderMode.ALTERNATE — pièces alternées, couleur de la saison et or [réglage actuel]
+        //   BorderMode.BLACK     — très sobre, verre noir
+        //   BorderMode.NONE      — pas de bordure : les losanges vont jusqu'au bord
+        val bayBorder = BorderMode.ALTERNATE
+        // Noël : fond or pâle (voir Bay.kt), centre crème — sur cet or, un
+        // centre doré disparaîtrait.
+        // Barlotière retirée (saddleBarPositions = emptyList()).
+        // Croix descendue de 6 % de la hauteur de la fenêtre
+        // (emblemOffsetRatio, Bay.kt) : la traverse passe sous la naissance
+        // de l'arc, dans la partie droite de la fenêtre, au lieu d'être
+        // serrée dans l'arc. 0.0 = position d'origine.
+        val crossBay = BayStyle.forLiturgical(liturgicalPalette, ArchShape.POINTED, border = bayBorder)
+            .copy(saddleBarPositions = emptyList(), emblemOffsetRatio = 0.06)
+        // <-- swap ici : médaillon de la croix EN BAIE (remplace medallionMode,
+        // plus haut). Couleur de la palette (MedallionMode.PALETTE), sauf à
+        // Noël : crème (MedallionMode.HOST). Pour un médaillon toujours
+        // crème : val crossMedallionMode = MedallionMode.HOST
+        val crossMedallionMode = if (liturgicalPalette == LiturgicalPalettes.NOEL) MedallionMode.HOST else MedallionMode.PALETTE
+        val crossBayRecipe = config.copy(
+            compositionSystem = radiantCrossComposition,
+            segmentationSystem = RadiantCrossSegmentationSystem(),
+            paletteSystem = WeightedRandomPaletteSystem(crossBay.raysFamiliesFor(paletteFamilies)),
+            crossMedallionShades = liturgicalPalette.medallionShades(crossMedallionMode),
+            bay = crossBay
+        )
+
+        // Ange dans une baie en plein cintre : robe IVOIRE (et non aux
+        // couleurs de la saison) — sur le fond en losanges sombre de la
+        // saison, une robe colorée disparaîtrait.
+        val angelBayComposition = RadiantAngelCompositionSystem(
+            showLightRays = false,
+            robeUsesPalette = false,
+            bodyHalfWidthDegrees = 26.0,
+            bodyRayCount = 6,
+            bodyMinDivisionsPerRay = 3,
+            bodyMaxDivisionsPerRay = 4,
+            wingCenterDegrees = 196.0,
+            wingHalfWidthDegrees = 38.0,
+            wingLowerLengthRatio = 0.38,
+            wingPeakLengthRatio = 0.80
+        )
+        // Fond sombre et désaturé (réglage par défaut) : sur une vitrerie
+        // claire, les ailes et la robe ivoire de l'ange se perdraient.
+        // Barlotière retirée ; pour la remettre sous la robe :
+        // saddleBarPositions = listOf(0.88).
+        val angelBayRecipe = config.copy(
+            compositionSystem = angelBayComposition,
+            bay = BayStyle.forLiturgical(liturgicalPalette, ArchShape.ROUND, border = bayBorder).copy(saddleBarPositions = emptyList())
+        )
+
         // <-- swap ici : recette affichée et exportée.
-        //   souvenirRecipe       — pavot, chrysanthème, cempasúchil (Toussaint) [réglage actuel]
+        //   crossBayRecipe       — croix rayonnante dans une baie en arc brisé (2:3) [réglage actuel]
+        //   angelBayRecipe       — ange dans une baie en plein cintre (2:3)
+        //   souvenirRecipe       — pavot, chrysanthème, cempasúchil (Toussaint)
         //   snowdropRecipe       — perce-neige, Noire (défunts)
         //   roseRecipe           — églantines, Rose (Gaudete, Laetare)
         //   easterRecipe         — lys blancs, Pâques (blanc et or)
@@ -483,7 +569,7 @@ fun main() = application {
         //   botanicalRecipe      — motif raccordable floral
         //   periodicShardsRecipe — motif raccordable en éclats
         //   config               — ange (ou croix) défini ci-dessus
-        val activeConfig = souvenirRecipe
+        val activeConfig = angelBayRecipe
 
         // Aperçu répété 2 × 2 (touche « r ») : pour vérifier le raccord
         // du motif. Chaque quart affiche la tuile entière, réduite.
@@ -510,8 +596,10 @@ fun main() = application {
         // reste 4:3, identique à l'aperçu (768×576) ; changer ce ratio
         // demanderait de revoir la composition, pas juste ces deux
         // nombres.
+        // Baie en arc : format 2:3, 3600×5400px, soit 12×18 pouces à
+        // 300 DPI (dans l'aperçu, la baie est centrée dans la fenêtre).
         val exportWidth = 3600
-        val exportHeight = 2700
+        val exportHeight = if (activeConfig.bay != null) 5400 else 2700
 
         keyboard.keyDown.listen {
             if (it.name == "r") {

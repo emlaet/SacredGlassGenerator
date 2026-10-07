@@ -518,10 +518,17 @@ data class LiturgicalPalette(
  *   comparaison visuelle qui a précédé ce choix — mais moins cohérent
  *   avec la lecture "hostie", puisque le médaillon change alors de
  *   couleur avec la saison.
+ *
+ * - PALETTE : le médaillon prend la couleur principale de la saison
+ *   (voir coloredMainShades : vert du Temps ordinaire, violet de l'Avent,
+ *   vieux rose de Gaudete, or de Noël, gris ardoise de la palette noire…),
+ *   pendant que les bras restent blancs (croix de lumière). Choisi pour
+ *   les baies sur vitrerie claire (Bay.kt).
  */
 enum class MedallionMode {
     HOST,
-    SEASONAL
+    SEASONAL,
+    PALETTE
 }
 
 /** Les teintes du médaillon selon le mode choisi. */
@@ -529,7 +536,21 @@ fun LiturgicalPalette.medallionShades(mode: MedallionMode): List<ColorRGBa> {
     return when (mode) {
         MedallionMode.HOST -> LiturgicalPalettes.CROSS_ARM_SHADES
         MedallionMode.SEASONAL -> seasonalMedallionShades
+        MedallionMode.PALETTE -> coloredMainShades()
     }
+}
+
+/**
+ * La couleur principale « lisible » d'une palette : la famille la plus
+ * pesante dont la luminance est comprise entre 0,20 et 0,75, c'est-à-dire
+ * ni presque blanche (le blanc de Noël) ni presque noire (l'anthracite de
+ * la palette noire). Ordinaire → #3C7A4E, Avent → #5B3168, Rose → #B08093,
+ * Noël → #D9A441, Rouge → #A6242E, Marial → #2E5C9A, Noire → #57534C.
+ */
+fun LiturgicalPalette.coloredMainShades(): List<ColorRGBa> {
+    fun lum(c: ColorRGBa): Double = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+    val readable = families.filter { f -> f.shades.map { c -> lum(c) }.average() in 0.20..0.75 }
+    return (readable.ifEmpty { families }).maxByOrNull { it.weight }!!.shades
 }
 
 object LiturgicalPalettes {
@@ -673,17 +694,23 @@ object LiturgicalPalettes {
     /**
      * Rose — 3e dimanche de l'Avent (Gaudete) et 4e dimanche de Carême
      * (Laetare) uniquement, variante ponctuelle du violet
-     * (LiturgicalPaletteRose).
+     * (LiturgicalPaletteRose). « Gaudete » et « Laetare » : « réjouissez-
+     * vous », la joie au milieu d'un temps de pénitence. Le rose liturgique
+     * est un violet éclairci, plus soutenu que le rose pâle habituel
+     * (E. McNamara, ZENIT, déc. 2004) : rose violacé, pas rose bonbon.
+     * Version ravivée (oct. 2026) : la première version (roseMain #B08093,
+     * saturation 0,23) était la plus grise des palettes colorées et
+     * paraissait terne.
      */
     val ROSE = LiturgicalPalette(
         name = "Rose — Gaudete/Laetare",
         families = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#7A4A5C")), 18.0), // roseDeep — ancrage
-            PaletteFamily(listOf(ColorRGBa.fromHex("#B08093")), 32.0), // roseMain — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#DCAEB8")), 20.0), // roseLight — transmission
-            PaletteFamily(listOf(ColorRGBa.fromHex("#EDD9DC")), 10.0), // rosePale — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#DCAE79")), 8.0),  // goldSoft — reflets
-            PaletteFamily(listOf(ColorRGBa.fromHex("#96684F")), 5.0)   // roseBronze — contraste chaud
+            PaletteFamily(listOf(ColorRGBa.fromHex("#8C3D63")), 18.0), // roseDeep — ancrage
+            PaletteFamily(listOf(ColorRGBa.fromHex("#C4628F")), 32.0), // roseMain — corps principal
+            PaletteFamily(listOf(ColorRGBa.fromHex("#E59AB8")), 20.0), // roseLight — transmission
+            PaletteFamily(listOf(ColorRGBa.fromHex("#F5D5E1")), 10.0), // rosePale — halo
+            PaletteFamily(listOf(ColorRGBa.fromHex("#E8B868")), 8.0),  // goldSoft — reflets
+            PaletteFamily(listOf(ColorRGBa.fromHex("#A55F4C")), 5.0)   // roseBronze — contraste chaud
         ),
         // nearBlackMauve — écho du violet parent, cœur de médaillon.
         seasonalMedallionShades = listOf(ColorRGBa.fromHex("#3D2530"))

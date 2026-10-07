@@ -72,7 +72,12 @@ data class VitrailConfig(
 
     /** Palette de la famille végétale (ignorée hors BotanicalGuide) —
      *  voir BotanicalPalettes, Botanical.kt. */
-    val botanicalPalette: BotanicalPalette = BotanicalPalettes.PRINTEMPS
+    val botanicalPalette: BotanicalPalette = BotanicalPalettes.PRINTEMPS,
+
+    /** Baie en arc (bordure, fond en losanges, barlotières) autour de la
+     *  composition — null = pas de baie (toutes les recettes existantes).
+     *  Voir Bay.kt. */
+    val bay: BayStyle? = null
 )
 
 /**
@@ -115,15 +120,19 @@ fun renderVitrail(
     config: VitrailConfig,
     canvasWidth: Double,
     canvasHeight: Double,
-    pixelScale: Double
+    requestedPixelScale: Double
 ) {
+
+    // Baie : l'échelle du plomb suit la largeur de la BAIE (voir
+    // bayPixelScale, Bay.kt), pas celle du canevas.
+    val pixelScale = config.bay?.let { bayPixelScale(it, canvasWidth, canvasHeight) } ?: requestedPixelScale
 
     val scaledCurvatureAmount = config.curvatureAmount * pixelScale
 
     // Génération (tirages aléatoires) : calculée une fois par recette et
     // par taille, puis réutilisée à chaque image de l'aperçu (voir
     // generateVitrail).
-    val (guide, cells, cellColors, materialVariation) =
+    val (guide, cells, cellColors, materialVariation, bayGeometry) =
         generateVitrail(config, canvasWidth, canvasHeight)
 
     // Système 4 — Plomb (épaisseur et décalage du reflet mis à l'échelle)
@@ -142,7 +151,7 @@ fun renderVitrail(
     // même matière — les pièces coupées par le bord de la tuile se
     // raccordent ainsi exactement avec leur autre moitié. Pour toutes les
     // autres compositions, une seule position (aucun changement).
-    val tile = tileSizeOf(guide)
+    val tile = if (bayGeometry != null) null else tileSizeOf(guide)
     val tileOffsets = if (tile != null) {
         (-1..1).flatMap { dx -> (-1..1).map { dy -> Vector2(dx * tile.x, dy * tile.y) } }
     } else {
@@ -206,12 +215,17 @@ fun renderVitrail(
 
     // Détails peints à la grisaille (famille végétale : barbes du blé,
     // vrilles), entre le verre et le plomb.
-    if (guide is BotanicalGuide) {
+    if (guide is BotanicalGuide && bayGeometry == null) {
         drawBotanicalPaint(targetDrawer, guide, tileOffsets, config.leadStyle.width * 0.36 * pixelScale)
     }
 
     // Bordures (Plomb)
     config.leadSystem.draw(targetDrawer, drawnCells, edgeCurveCache, scaledCurvatureAmount, leadStyle)
+
+    // Baie : grand plomb du pourtour et barlotières, par-dessus tout.
+    if (config.bay != null && bayGeometry != null) {
+        drawBayIron(targetDrawer, config.bay, bayGeometry, leadStyle.width)
+    }
 }
 
 /** Tout ce que les tirages aléatoires décident pour une œuvre. */
@@ -219,7 +233,9 @@ data class GeneratedVitrail(
     val guide: CompositionGuide,
     val cells: List<List<Vector2>>,
     val cellColors: List<ColorRGBa>,
-    val materialVariation: List<Double>
+    val materialVariation: List<Double>,
+    /** Géométrie de la baie (null sans baie). */
+    val bay: BayGeometry? = null
 )
 
 // Dernières générations calculées (aperçu, aperçu 2 × 2, export) : la
@@ -260,10 +276,16 @@ private fun computeVitrail(
 
     val random = Random(config.seed)
 
+    // Baie : la composition est générée dans le rectangle de la fenêtre
+    // (mêmes tirages que sans baie), puis la baie est assemblée autour.
+    val bayGeometry = config.bay?.let { bayGeometry(it, canvasWidth, canvasHeight) }
+    val contentWidth = bayGeometry?.generationWidth ?: canvasWidth
+    val contentHeight = bayGeometry?.generationHeight ?: canvasHeight
+
     // Système 1 — Composition
     val guide = config.compositionSystem.generate(
-        canvasWidth,
-        canvasHeight,
+        contentWidth,
+        contentHeight,
         config.numberOfSites,
         random
     )
@@ -271,8 +293,8 @@ private fun computeVitrail(
     // Système 2 — Segmentation
     val cells = config.segmentationSystem.segment(
         guide,
-        canvasWidth,
-        canvasHeight,
+        contentWidth,
+        contentHeight,
         random
     )
 
@@ -329,6 +351,12 @@ private fun computeVitrail(
 
     // Système 5 — Verre (variation de matière de chaque pièce)
     val materialVariation = config.glassSystem.assignMaterialVariation(cells.size, random)
+
+    if (config.bay != null && bayGeometry != null) {
+        val (bayCells, bayColors, bayMaterial) =
+            assembleBay(config, config.bay, bayGeometry, cells, cellColors, materialVariation)
+        return GeneratedVitrail(guide, bayCells, bayColors, bayMaterial, bayGeometry)
+    }
 
     return GeneratedVitrail(guide, cells, cellColors, materialVariation)
 }

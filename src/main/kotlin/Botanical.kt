@@ -373,14 +373,16 @@ object BotanicalPalettes {
     )
 
     /**
-     * Lys blancs — Pâques (blanc et or) : le champ de couleur reprend les ors
-     * de LiturgicalPalettes.NOEL (« gloire »), plus clairs que pour Noël ;
+     * Lys blancs — Pâques (blanc et or) : le champ de couleur est un or pâle,
+     * nettement plus clair que celui de Noël pour que les deux motifs « blanc
+     * et or » ne se confondent pas (les lys s'en détachent un peu moins) ;
      * lys ivoire et perle, ombres champagne ; boutons blanc verdâtre ;
      * feuillage vert frais.
      */
     val PAQUES_FLEURS = botanicalPalette(
         name = "Lys blancs — Pâques",
-        background = listOf("#D9A441", "#E0B055", "#E8BD62", "#F0C674"),
+        // or pâle, nettement plus clair que celui de Noël (#C9952F → #EBC06B)
+        background = listOf("#E3C27A", "#EACD8A", "#F0D79B", "#F5E1AC"),
         stem = listOf("#5E8A4E", "#6A9658"),
         leafLight = listOf("#9DC48A", "#AACD97", "#8FB97C"),
         leafDark = listOf("#6F9E5E", "#7AA868", "#64925A"),
