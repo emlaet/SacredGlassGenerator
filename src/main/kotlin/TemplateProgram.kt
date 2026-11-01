@@ -21,7 +21,9 @@ import org.openrndr.extensions.Screenshots
 //
 // Réglage actuel : BAIE EN ARC BRISÉ avec croix rayonnante (format
 // 2:3, pour les tirages muraux — voir crossBayRecipe, angelBayRecipe et
-// Bay.kt). Motifs raccordables : fleurs du souvenir (Toussaint,
+// Bay.kt). Autres croix (ShapedCross.kt), avec ou sans baie : tréflée,
+// celtique et rondouillarde (trefoilRecipe, celticRecipe, roundedRecipe ;
+// trefoilBayRecipe, celticBayRecipe, roundedBayRecipe). Motifs raccordables : fleurs du souvenir (Toussaint,
 // souvenirRecipe, Botanical.kt ; touche « r » : aperçu répété 2 × 2) ;
 // perce-neige (Noire, snowdropRecipe) ; églantines (Rose, roseRecipe) ; lys blancs (Pâques, easterRecipe) ; passiflores, roses rouges et palmes (Rouge, redRecipe) ;
 // branche de Jessé
@@ -207,7 +209,7 @@ fun main() = application {
         //
         // <-- swap ici : palette active. Sept disponibles :
         //   LiturgicalPalettes.ORDINAIRE — vert, temps ordinaire [réglage actuel]
-        //   LiturgicalPalettes.NOEL      — blanc et or, Noël/Pâques
+        //   LiturgicalPalettes.NOEL      — blanc lumineux, Noël/Pâques (ocres au centre, blancs vers l'extérieur)
         //   LiturgicalPalettes.AVENT     — violet, Avent/Carême
         //   LiturgicalPalettes.ROUGE     — rouge, Pentecôte/martyrs
         //   LiturgicalPalettes.NOIRE     — noir, funérailles (facultatif)
@@ -277,6 +279,20 @@ fun main() = application {
             wingPeakLengthRatio = 0.80
         )
 
+        // <-- swap ici : FORMAT D'IMPRESSION (voir PrintFormat.kt) — taille
+        // réelle du produit en millimètres (fond perdu compris si le gabarit
+        // en demande un) et résolution en dpi (ppp, 300 au minimum pour
+        // Gelato). L'export (touche « e ») fait alors largeur ÷ 25,4 × dpi
+        // pixels de large, et la composition est cadrée aux proportions du
+        // format (un carré pour 60 × 60 cm), dans l'aperçu comme à l'export.
+        //   null                                — export par défaut : 3600 × 2700 px (4:3), baie 3600 × 5400 px [réglage actuel]
+        //   PrintFormat(600.0, 600.0, 300.0)    — aluminium 60 × 60 cm, 300 ppp (7087 × 7087 px)
+        //   PrintFormat(400.0, 600.0, 300.0)    — 40 × 60 cm (baie 2:3), 300 ppp (4724 × 7087 px)
+        //   PrintFormat(300.0, 225.0, 300.0)    — 30 × 22,5 cm (4:3), 300 ppp : l'export actuel
+        // Ne s'applique ni aux motifs raccordables ni au champ de rayons (qui
+        // a son propre format, plus bas).
+        val printFormat: PrintFormat? = null
+
         val config = VitrailConfig(
             seed = seed,
             numberOfSites = numberOfSites,
@@ -289,14 +305,14 @@ fun main() = application {
             // SunburstCompositionSystem(sunburstNumberOfRays, sunburstCoreRadiusRatio, sunburstAngleIrregularity, sunburstMinDivisionsPerRay, sunburstMaxDivisionsPerRay)
             // radiantCrossComposition (croix rayonnante), RadiantAngelCompositionSystem()
             // (ange entouré de rayons colorés) — voir juste au-dessus de la recette
-            compositionSystem = angelRobeVariant, // <-- swap ici
+            compositionSystem = radiantCrossComposition, // <-- swap ici
 
             // Système 2 — Segmentation (à échanger avec la composition)
             // Alternatives disponibles : GridSegmentationSystem(),
             // VoronoiSegmentationSystem(relaxationIterations),
             // RadialSegmentationSystem(), SunburstSegmentationSystem(),
             // RadiantCrossSegmentationSystem()
-            segmentationSystem = RadiantAngelSegmentationSystem(), // <-- swap ici
+            segmentationSystem = RadiantCrossSegmentationSystem(), // <-- swap ici
 
             // Système 3 — Palette
             // Les rayons de lumière n'ont pas besoin de regroupement
@@ -304,7 +320,11 @@ fun main() = application {
             // distinctes, un tirage indépendant pondéré suffit. Voir
             // Palette.kt pour le détail des essais précédents pertinents
             // pour les styles à cellules petites et nombreuses (Voronoï).
-            paletteSystem = WeightedRandomPaletteSystem(paletteFamilies), // <-- swap ici
+            // raysPaletteSystem (Palette.kt) : WeightedRandomPaletteSystem(paletteFamilies)
+            // pour toutes les palettes, sauf la palette « blanc lumineux » de
+            // Noël/Pâques, répartie en rayons (RadialLuminousPaletteSystem :
+            // ocres près du centre, blancs chauds et froids vers l'extérieur).
+            paletteSystem = liturgicalPalette.raysPaletteSystem(), // <-- swap ici
             crossArmShades = crossArmShades,
             crossMedallionShades = crossMedallionShades,
 
@@ -358,7 +378,10 @@ fun main() = application {
             // Ange rayonnant : poitrine dans la teinte sombre de la saison
             // active. Tête, nimbe, robe et ailes gardent leurs teintes par
             // défaut (voir ANGEL_…_SHADES dans Palette.kt).
-            angelChestShades = liturgicalPalette.seasonalMedallionShades
+            angelChestShades = liturgicalPalette.seasonalMedallionShades,
+
+            // Format d'impression (voir printFormat plus haut)
+            printFormat = printFormat
         )
 
         // Motif RACCORDABLE « lignes maîtresses + éclats » (impression
@@ -504,12 +527,13 @@ fun main() = application {
         // Médaillon : couleur de la saison (MedallionMode.PALETTE) ou crème,
         // lecture « hostie » (MedallionMode.HOST) — voir Palette.kt.
         // <-- swap ici : bordure de la baie (croix et ange) :
-        //   BorderMode.ALTERNATE — pièces alternées, couleur de la saison et or [réglage actuel]
+        //   BorderMode.ALTERNATE — pièces alternées, couleur de la saison et or (Noël/Pâques : ocre et blanc) [réglage actuel]
         //   BorderMode.BLACK     — très sobre, verre noir
         //   BorderMode.NONE      — pas de bordure : les losanges vont jusqu'au bord
         val bayBorder = BorderMode.ALTERNATE
-        // Noël : fond or pâle (voir Bay.kt), centre crème — sur cet or, un
-        // centre doré disparaîtrait.
+        // Noël/Pâques (palette « blanc lumineux ») : vitrerie en nacre et
+        // champagne, bordure ocre et blanc (voir Bay.kt), centre crème ; les
+        // rayons y suivent la répartition radiale (ocres au centre).
         // Barlotière retirée (saddleBarPositions = emptyList()).
         // Croix descendue de 6 % de la hauteur de la fenêtre
         // (emblemOffsetRatio, Bay.kt) : la traverse passe sous la naissance
@@ -525,9 +549,72 @@ fun main() = application {
         val crossBayRecipe = config.copy(
             compositionSystem = radiantCrossComposition,
             segmentationSystem = RadiantCrossSegmentationSystem(),
-            paletteSystem = WeightedRandomPaletteSystem(crossBay.raysFamiliesFor(paletteFamilies)),
+            paletteSystem = liturgicalPalette.raysPaletteSystem(crossBay),
             crossMedallionShades = liturgicalPalette.medallionShades(crossMedallionMode),
             bay = crossBay
+        )
+
+        // Croix DESSINÉES (ShapedCross.kt) dans la même baie, avec les mêmes
+        // rayons colorés passant derrière elles :
+        // - croix tréflée : bras terminés par trois lobes arrondis ;
+        // - croix celtique : anneau doré autour du croisement, pièces de
+        //   couleur à l'intérieur de l'anneau. Anneau en blanc cassé, comme
+        //   les bras : ShapedCrossCompositionSystem(ShapedCrossStyle.CELTIC, ringGold = false)
+        val trefoilBayRecipe = crossBayRecipe.copy(
+            compositionSystem = ShapedCrossCompositionSystem(ShapedCrossStyle.TREFOIL),
+            segmentationSystem = ShapedCrossSegmentationSystem()
+        )
+        val celticBayRecipe = crossBayRecipe.copy(
+            compositionSystem = ShapedCrossCompositionSystem(ShapedCrossStyle.CELTIC),
+            segmentationSystem = ShapedCrossSegmentationSystem()
+        )
+        // (croix rondouillarde en baie : voir roundedBayRecipe plus bas, après
+        // le choix de son motif)
+
+        // Les mêmes croix SANS BAIE (format 4:3, fond transparent à l'export,
+        // médaillon selon medallionMode plus haut) :
+        // - croix tréflée grecque (quatre bras égaux, comme la croix de
+        //   saint Maurice) ; croix latine : equalArms = false ;
+        // - croix celtique (latine) ;
+        // - croix « rondouillarde » : sans rayons, les couleurs de la saison
+        //   dans les pièces de la croix (voir roundedScheme ci-dessous).
+        val trefoilRecipe = config.copy(
+            compositionSystem = ShapedCrossCompositionSystem(ShapedCrossStyle.TREFOIL),
+            segmentationSystem = ShapedCrossSegmentationSystem()
+        )
+        val celticRecipe = config.copy(
+            compositionSystem = ShapedCrossCompositionSystem(ShapedCrossStyle.CELTIC),
+            segmentationSystem = ShapedCrossSegmentationSystem()
+        )
+        // <-- swap ici : dessin intérieur de la croix rondouillarde (RoundedPatterns.kt) :
+        //   RoundedPattern.GEMS    — croix gemmée : corps ivoire, filet coloré, cinq pierres serties [réglage actuel]
+        //   RoundedPattern.LANCETS — lancettes rayonnantes, en dégradé (comme une rose)
+        //   RoundedPattern.RHOMBI  — losanges en spirale, en dégradé
+        //   RoundedPattern.PLAIN   — découpe simple, couleurs selon roundedScheme ci-dessous
+        // Les motifs ont leur propre cœur doré (medallionMode ne s'y applique pas).
+        val roundedPattern = RoundedPattern.GEMS
+        // <-- swap ici : couleurs de la découpe simple (RoundedPattern.PLAIN, ShapedCross.kt) :
+        //   RoundedCrossScheme.PINWHEEL       — cœur clair, bouts des bras en deux tons alternés [réglage actuel]
+        //   RoundedCrossScheme.CORE           — cœur dans la couleur de la saison, bouts plus clairs
+        //   RoundedCrossScheme.TIPS           — cœur blanc cassé, bouts dans la couleur de la saison
+        //   RoundedCrossScheme.PINWHEEL_LIGHT — cœur de la saison, bouts alternés clair / blanc cassé
+        // Pour la croix blanche entourée de rayons : retirer tierShades et
+        // showRays = false.
+        val roundedScheme = RoundedCrossScheme.PINWHEEL
+        val roundedRecipe = config.copy(
+            compositionSystem = ShapedCrossCompositionSystem(
+                ShapedCrossStyle.ROUNDED,
+                showRays = false,
+                tierShades = liturgicalPalette.roundedCrossShades(roundedScheme),
+                pattern = roundedPattern,
+                patternColors = liturgicalPalette.roundedCrossColors()
+            ),
+            segmentationSystem = ShapedCrossSegmentationSystem()
+        )
+        // Croix rondouillarde dans la baie, même motif (sans rayons)
+        val roundedBayRecipe = crossBayRecipe.copy(
+            compositionSystem = roundedRecipe.compositionSystem,
+            segmentationSystem = ShapedCrossSegmentationSystem()
         )
 
         // Ange dans une baie en plein cintre : robe IVOIRE (et non aux
@@ -553,10 +640,130 @@ fun main() = application {
             compositionSystem = angelBayComposition,
             bay = BayStyle.forLiturgical(liturgicalPalette, ArchShape.ROUND, border = bayBorder).copy(saddleBarPositions = emptyList())
         )
+        // Le même ange, entouré de RAYONS de lumière dans la baie. Conseillé
+        // pour Noël/Pâques : sur la vitrerie claire (nacre et champagne), les
+        // ailes blanches et la robe ivoire ne se détachent que par le plomb ;
+        // les rayons ocres derrière l'ange (gloire) découpent sa silhouette.
+        val angelRaysBayRecipe = angelBayRecipe.copy(
+            compositionSystem = RadiantAngelCompositionSystem(
+                showLightRays = true,
+                robeUsesPalette = false,
+                bodyHalfWidthDegrees = 26.0,
+                bodyRayCount = 6,
+                bodyMinDivisionsPerRay = 3,
+                bodyMaxDivisionsPerRay = 4,
+                wingCenterDegrees = 196.0,
+                wingHalfWidthDegrees = 38.0,
+                wingLowerLengthRatio = 0.38,
+                wingPeakLengthRatio = 0.80
+            )
+        )
+
+        // FOND « CHAMP DE RAYONS » (RayField.kt) — un fond seul, dans l'esprit
+        // d'un vitrail, à superposer sous un autre calque (carte de vœux
+        // Gelato…) : rayons en deux teintes alternées, anneaux de plomb
+        // concentriques continus, sur tout le format, fond perdu compris.
+        // FORMAT en millimètres (format fini + fond perdu de chaque côté),
+        // RÉSOLUTION en dpi (ppp) : l'export (touche « e ») fait
+        // (format fini + 2 × fond perdu) ÷ 25,4 × dpi pixels de côté. Le
+        // format doit être celui du produit Gelato, sinon Gelato agrandit
+        // l'image et la résolution réelle baisse (un fichier prévu pour
+        // 141 mm, imprimé sur environ 206 mm, n'est plus qu'à ~214 ppp).
+        // Changer dpi ne change pas le dessin, seulement le nombre de pixels.
+        // ⚠ dpi est une RÉSOLUTION (300 à 600), pas une taille : une valeur
+        // très élevée demanderait une image de centaines de milliers
+        // de pixels de côté, impossible à créer. Ce réglage ne vaut que pour
+        // le champ de rayons ; pour les autres recettes, voir printFormat.
+        // Dans l'aperçu, le format est centré. Plombs droits (courbure 0) ;
+        // largeur du plomb : leadWidthMm à l'impression (0,762 mm).
+        // COULEURS DU FOND : elles suivent la palette active (liturgicalPalette,
+        // plus haut), d'après la liste RayFieldBackgrounds (RayField.kt) :
+        //   Blanc (Noël/Pâques) — bleu nuit de l'ange     #16214A / #1C2A5C
+        //   Rouge               — bleu canard profond     #072A30 / #0A343B
+        //   Vert (ordinaire)    — bleu nuit franc         #16214A / #1C2A5C
+        //   Violet              — pierre chaude claire   #D2CBC0 / #DED8CE
+        //   Rose                — vert sapin franc        #0D2A22 / #11332A
+        //   Bleu marial         — blanc froid très pâle   #F3F4F2 / #E4E7EA
+        //   Noir                — blanc cassé / gris clair #F0EFEC / #DCDAD5
+        // <-- swap ici : pour un autre fond que celui de la saison, par exemple :
+        //   val rayFieldBackground = RayFieldBackgrounds.ROUGE
+        val rayFieldBackground = RayFieldBackgrounds.NOEL
+
+        // <-- swap ici : réglages du fond. Exemples :
+        //   trimWidthMm = 200.0, trimHeightMm = 200.0 — carte carrée de 20 cm
+        //   trimWidthMm = 148.0, trimHeightMm = 210.0 — format A5 portrait
+        //   dpi = 600.0                            — export deux fois plus fin
+        //   rayCount = 32                          — 32 rayons au lieu de 24
+        //   medallionRadius = 0.06                 — médaillon plein au centre
+        //   shades = liturgicalPalette.rayFieldShades(),
+        //   medallionShades = liturgicalPalette.rayFieldMedallionShades()
+        //                                          — rayons dans la couleur principale de la saison, au lieu du fond de la liste
+        val rayField = RayFieldCompositionSystem(
+            trimWidthMm = 141.0,
+            trimHeightMm = 141.0,
+            bleedMm = 3.0,
+            dpi = 600.0,
+            rayCount = 24,
+            shades = rayFieldBackground.shades,
+            medallionShades = rayFieldBackground.medallionShades
+        )
+        val rayFieldRecipe = config.copy(
+            compositionSystem = rayField,
+            segmentationSystem = RayFieldSegmentationSystem(),
+            curvatureAmount = 0.0,
+            leadStyle = config.leadStyle.copy(width = rayField.referenceLeadWidth()),
+            bay = null
+        )
+
+        // ------------------------
+        // ROSACE (Rosace.kt)
+        // ------------------------
+        // Rosace rayonnante gothique : remplage en pierre, vitraux au plomb,
+        // symétrie stricte. Aucun tirage aléatoire (le seed ne change que la
+        // matière du verre).
+        // <-- swap ici : nombre de rotations (secteurs identiques), de 3 à 48.
+        // Pair : les trèfles alternent de couleur d'un secteur à l'autre.
+        // Exemples essayés : 4, 5, 6, 8, 10, 12, 16, 24.
+        val rosaceRotations = 12
+        // <-- swap ici : couleurs de la rosace (RosaceSchemes, Rosace.kt) :
+        //   RosaceSchemes.forLiturgical(liturgicalPalette) — suit la palette de la saison choisie plus haut
+        //   RosaceSchemes.CATHEDRALE       — bleu et rouge, trèfles jaunes et blancs
+        //   RosaceSchemes.ORDINAIRE        — vert (Temps ordinaire)
+        //   RosaceSchemes.NOEL             — blanc lumineux (Noël, Pâques)
+        //   RosaceSchemes.AVENT            — violet (Avent, Carême)
+        //   RosaceSchemes.ROUGE            — rouge (Passion, Pentecôte, martyrs)
+        //   RosaceSchemes.NOIRE            — noir (défunts)
+        //   RosaceSchemes.ROSE             — rose (Gaudete, Laetare)
+        //   RosaceSchemes.MARIAL           — bleu marial (dévotionnel)
+        //   RosaceSchemes.PIERRE_ET_PLOMB  — pierre et plombs seuls, verre blanc cassé
+    val rosaceScheme = RosaceSchemes.PIERRE_ET_PLOMB
+        // <-- swap ici : format de la rosace (carré). 300 × 300 mm à 300 ppp
+        // = export de 3543 × 3543 px ; PrintFormat(600.0, 600.0, 300.0) pour
+        // un tirage de 60 × 60 cm (7087 × 7087 px). Hors du disque, l'export
+        // est transparent.
+        val rosaceRecipe = config.copy(
+            compositionSystem = RosaceCompositionSystem(rotations = rosaceRotations),
+            segmentationSystem = RosaceSegmentationSystem(),
+            curvatureAmount = 0.0,
+            // Plomb fin : la rosace compte plus de 2 000 pièces.
+            leadStyle = config.leadStyle.copy(width = 1.2),
+            // Opalescence réduite : les pièces homologues gardent le même éclat.
+            glassStyle = config.glassStyle.copy(opalescenceStrength = 0.05),
+            rosaceScheme = rosaceScheme,
+            bay = null,
+            printFormat = PrintFormat(300.0, 300.0, 300.0)
+        )
 
         // <-- swap ici : recette affichée et exportée.
         //   crossBayRecipe       — croix rayonnante dans une baie en arc brisé (2:3) [réglage actuel]
+        //   trefoilBayRecipe     — croix tréflée dans une baie en arc brisé (2:3)
+        //   celticBayRecipe      — croix celtique dans une baie en arc brisé (2:3)
+        //   roundedBayRecipe     — croix rondouillarde (même motif) dans une baie en arc brisé (2:3)
+        //   trefoilRecipe        — croix tréflée (grecque), sans baie
+        //   celticRecipe         — croix celtique, sans baie
+        //   roundedRecipe        — croix rondouillarde (motif roundedPattern), sans baie
         //   angelBayRecipe       — ange dans une baie en plein cintre (2:3)
+        //   angelRaysBayRecipe   — ange entouré de rayons dans la baie (conseillé à Noël/Pâques : rayons ocres)
         //   souvenirRecipe       — pavot, chrysanthème, cempasúchil (Toussaint)
         //   snowdropRecipe       — perce-neige, Noire (défunts)
         //   roseRecipe           — églantines, Rose (Gaudete, Laetare)
@@ -568,8 +775,9 @@ fun main() = application {
         //   vineRecipe           — vigne et blé, Temps ordinaire
         //   botanicalRecipe      — motif raccordable floral
         //   periodicShardsRecipe — motif raccordable en éclats
+        //   rayFieldRecipe       — fond « champ de rayons » (carte de vœux…), format libre
         //   config               — ange (ou croix) défini ci-dessus
-        val activeConfig = angelBayRecipe
+        val activeConfig = rosaceRecipe
 
         // Aperçu répété 2 × 2 (touche « r ») : pour vérifier le raccord
         // du motif. Chaque quart affiche la tuile entière, réduite.
@@ -598,8 +806,16 @@ fun main() = application {
         // nombres.
         // Baie en arc : format 2:3, 3600×5400px, soit 12×18 pouces à
         // 300 DPI (dans l'aperçu, la baie est centrée dans la fenêtre).
-        val exportWidth = 3600
-        val exportHeight = if (activeConfig.bay != null) 5400 else 2700
+        // Fond « champ de rayons » : la taille de son format, fond perdu
+        // compris (voir rayField plus haut).
+        // Format d'impression (printFormat, plus haut) : sa taille en pixels.
+        // Motifs raccordables : toujours 3600 × 2700 px (la tuile).
+        val rayFieldFormat = activeConfig.compositionSystem as? RayFieldCompositionSystem
+        val isTile = activeConfig.compositionSystem is PeriodicShardsCompositionSystem ||
+                activeConfig.compositionSystem is BotanicalCompositionSystem
+        val printPx = if (isTile) null else activeConfig.printFormat
+        val exportWidth = rayFieldFormat?.fullWidthPx ?: printPx?.widthPx ?: 3600
+        val exportHeight = rayFieldFormat?.fullHeightPx ?: printPx?.heightPx ?: if (activeConfig.bay != null) 5400 else 2700
 
         keyboard.keyDown.listen {
             if (it.name == "r") {

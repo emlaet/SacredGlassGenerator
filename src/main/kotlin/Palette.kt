@@ -120,6 +120,130 @@ class WeightedRandomPaletteSystem(
 }
 
 /**
+ * Système de palette qui a besoin de la COMPOSITION (son centre, ses
+ * rayons…) et pas seulement des cellules. computeVitrail (Renderer.kt)
+ * appelle cette version-ci quand le système l'implémente ; tous les autres
+ * systèmes gardent assignColors(cells, random), sans aucun changement.
+ */
+interface GuidedPaletteSystem : PaletteSystem {
+    fun assignColors(
+        guide: CompositionGuide,
+        cells: List<List<Vector2>>,
+        random: Random
+    ): List<ColorRGBa>
+}
+
+/**
+ * Répartition RADIALE d'une palette « blanc lumineux » (LuminousScheme) :
+ * le poids de chaque famille dépend de la distance de la pièce au centre de
+ * l'emblème. Les ocres restent près du centre (la gloire qui découpe la
+ * silhouette de la croix), les blancs chauds et froids vont vers
+ * l'extérieur (rayons lointains). Voir LuminousScheme pour les réglages.
+ *
+ * - Croix rayonnante et croix dessinées : t = distance / longueur maximale
+ *   des rayons (0 au centre, 1 au bout des rayons les plus longs). Chaque
+ *   croix a sa table (LuminousScheme : crossRadial pour la croix rayonnante
+ *   et la tréflée, celticRadial pour la celtique, radial sinon).
+ * - Ange rayonnant : les rayons de lumière derrière l'ange restent ocres
+ *   (angelRayFamilies) ; la robe, quand elle prend les couleurs de la
+ *   palette, suit la répartition radiale sur sa longueur.
+ * - Toute autre composition : tirage pondéré ordinaire sur les familles de
+ *   référence de la palette (comme WeightedRandomPaletteSystem).
+ *
+ * Deux tirages par cellule, comme WeightedRandomPaletteSystem (famille,
+ * puis nuance). La distance relative est arrondie à 1e-6 avant le calcul
+ * des poids : l'aperçu et l'export, calculés à des tailles différentes,
+ * tirent ainsi exactement les mêmes couleurs.
+ */
+class RadialLuminousPaletteSystem(
+    private val palette: LiturgicalPalette
+) : GuidedPaletteSystem {
+
+    private val scheme: LuminousScheme = requireNotNull(palette.luminous) {
+        "RadialLuminousPaletteSystem : la palette ${palette.name} n'a pas de LuminousScheme"
+    }
+
+    /** Sans composition connue : tirage pondéré ordinaire. */
+    override fun assignColors(cells: List<List<Vector2>>, random: Random): List<ColorRGBa> =
+        WeightedRandomPaletteSystem(palette.families).assignColors(cells, random)
+
+    override fun assignColors(
+        guide: CompositionGuide,
+        cells: List<List<Vector2>>,
+        random: Random
+    ): List<ColorRGBa> {
+        return when (guide) {
+            is CompositionGuide.RadiantCross ->
+                radial(cells, guide.center, guide.maxRadius * guide.lightLengthMaxRatio, scheme.crossRadial, random)
+            is ShapedCrossGuide ->
+                if (guide.center != null && guide.rayRadius > 0.0) {
+                    val table = when (guide.style) {
+                        ShapedCrossStyle.TREFOIL -> scheme.crossRadial
+                        ShapedCrossStyle.CELTIC -> scheme.celticRadial
+                        else -> scheme.radial
+                    }
+                    radial(cells, guide.center, guide.rayRadius, table, random)
+                } else assignColors(cells, random)
+            is CompositionGuide.RadiantAngel -> {
+                val body = guide.bodyWindow
+                val bodyLength = guide.maxRadius * body.lengthRatio
+                cells.map { cell ->
+                    val g = polygonCentroid(cell)
+                    val dx = g.x - guide.center.x
+                    val dy = g.y - guide.center.y
+                    val angle = Math.toDegrees(kotlin.math.atan2(dy, dx)).let { if (it < 0.0) it + 360.0 else it } % 360.0
+                    if (angularDistanceDegrees(angle, body.centerDegrees) <= body.halfWidthDegrees) {
+                        pickWeighted(scheme.radial.familiesAt(roundedRatio(sqrt(dx * dx + dy * dy), bodyLength)), random)
+                    } else {
+                        pickWeighted(scheme.angelRayFamilies, random)
+                    }
+                }
+            }
+            else -> assignColors(cells, random)
+        }
+    }
+
+    private fun radial(cells: List<List<Vector2>>, center: Vector2, reference: Double, table: RadialTable, random: Random): List<ColorRGBa> =
+        cells.map { cell ->
+            val g = polygonCentroid(cell)
+            val dx = g.x - center.x
+            val dy = g.y - center.y
+            pickWeighted(table.familiesAt(roundedRatio(sqrt(dx * dx + dy * dy), reference)), random)
+        }
+
+    private fun roundedRatio(d: Double, reference: Double): Double =
+        Math.round(d / reference * 1e6) / 1e6
+
+    private fun pickWeighted(families: List<PaletteFamily>, random: Random): ColorRGBa {
+        val total = families.sumOf { it.weight }
+        var pick = random.nextDouble() * total
+        var chosen = families.last()
+        for (family in families) {
+            pick -= family.weight
+            if (pick <= 0.0) {
+                chosen = family
+                break
+            }
+        }
+        return chosen.shades[random.nextInt(chosen.shades.size)]
+    }
+}
+
+/**
+ * Le système de palette des RAYONS pour une palette liturgique :
+ * - palette « blanc lumineux » (luminous non nul, Noël/Pâques) :
+ *   RadialLuminousPaletteSystem — ocres au centre, blancs vers l'extérieur ;
+ *   la baie n'intervient pas (les blancs des rayons et la vitrerie nacrée se
+ *   distinguent par le contraste chaud/froid et par les plombs) ;
+ * - toutes les autres : tirage pondéré sur les familles de la palette, ou,
+ *   dans une baie, sur les seules familles lisibles sur son fond
+ *   (BayStyle.raysFamiliesFor) — exactement comme avant.
+ */
+fun LiturgicalPalette.raysPaletteSystem(bay: BayStyle? = null): PaletteSystem =
+    if (luminous != null) RadialLuminousPaletteSystem(this)
+    else WeightedRandomPaletteSystem(bay?.raysFamiliesFor(families) ?: families)
+
+/**
  * Une famille de teintes harmonieuses (plusieurs nuances proches,
  * comme un coloriste choisirait "les bleus" plutôt qu'"un bleu") et
  * son poids relatif — combien de place cette famille doit occuper
@@ -501,7 +625,75 @@ fun applyRadiantAngelColors(
 data class LiturgicalPalette(
     val name: String,
     val families: List<PaletteFamily>,
-    val seasonalMedallionShades: List<ColorRGBa>
+    val seasonalMedallionShades: List<ColorRGBa>,
+    /**
+     * Répartition « blanc lumineux » (Noël/Pâques) : ocres au centre, blancs
+     * vers l'extérieur — voir LuminousScheme. null pour toutes les autres
+     * palettes, qui gardent le tirage pondéré ordinaire.
+     */
+    val luminous: LuminousScheme? = null
+)
+
+/**
+ * Répartition radiale d'une palette : les poids de chaque famille à
+ * quelques positions t (0 = centre de l'emblème, 1 = bout des rayons les
+ * plus longs), interpolés linéairement entre deux positions.
+ *
+ * - knots : positions t, croissantes ;
+ * - families : nuances de chaque famille et son poids à chaque position.
+ */
+data class RadialTable(
+    val knots: List<Double>,
+    val families: List<Pair<List<ColorRGBa>, List<Double>>>
+) {
+    init {
+        require(knots.size >= 2 && knots.zipWithNext().all { (a, b) -> a < b }) { "RadialTable : knots croissants requis" }
+        require(families.all { it.second.size == knots.size }) { "RadialTable : un poids par position de knots" }
+    }
+
+    /** Familles et poids à la position radiale t (bornée à [premier, dernier] knot). */
+    fun familiesAt(t: Double): List<PaletteFamily> {
+        val x = t.coerceIn(knots.first(), knots.last())
+        var i = 0
+        while (i < knots.size - 2 && x > knots[i + 1]) i++
+        val u = (x - knots[i]) / (knots[i + 1] - knots[i])
+        return families
+            .map { (shades, w) -> PaletteFamily(shades, w[i] + (w[i + 1] - w[i]) * u) }
+            .filter { it.weight > 0.0 }
+    }
+}
+
+/**
+ * Palette « blanc lumineux » : rien de brillant ni de doré à l'impression,
+ * le blanc reste la couleur de référence, et l'OCRE n'est placé que là où il
+ * découpe la silhouette (gloire autour de la croix ou de l'ange, nimbe,
+ * bordure de la baie). Les blancs chauds et froids mêlés vers l'extérieur se
+ * distinguent de l'ivoire des bras par le contraste chaud/froid ; les plombs
+ * noirs font le reste. L'anneau de la croix celtique garde l'or vif commun à
+ * toutes les palettes (BayStyle.BORDER_GOLD), pour la cohérence des designs.
+ *
+ * - radial : table radiale de référence (robe de l'ange, croix
+ *   rondouillarde à rayons…) ;
+ * - crossRadial : croix rayonnante et croix tréflée (zone ocre un peu plus
+ *   large, pour mieux détacher la croix) ;
+ * - celticRadial : croix celtique (par défaut, la table de référence) ;
+ * - angelRayFamilies : rayons de lumière derrière l'ange (restent ocres) ;
+ * - ochre : accents ocres (bordure de la baie, cœur des motifs de la croix
+ *   rondouillarde) ;
+ * - white : blancs de la bordure, alternés avec l'ocre ;
+ * - quarries : losanges de la baie (nacre et champagne) ;
+ * - gradient : dégradé des motifs de la croix rondouillarde, du centre
+ *   (ocre) aux bords (blancs).
+ */
+data class LuminousScheme(
+    val radial: RadialTable,
+    val crossRadial: RadialTable = radial,
+    val celticRadial: RadialTable = radial,
+    val angelRayFamilies: List<PaletteFamily>,
+    val ochre: List<ColorRGBa>,
+    val white: List<ColorRGBa>,
+    val quarries: List<ColorRGBa>,
+    val gradient: List<ColorRGBa>
 )
 
 /**
@@ -521,7 +713,7 @@ data class LiturgicalPalette(
  *
  * - PALETTE : le médaillon prend la couleur principale de la saison
  *   (voir coloredMainShades : vert du Temps ordinaire, violet de l'Avent,
- *   vieux rose de Gaudete, or de Noël, gris ardoise de la palette noire…),
+ *   framboise douce de Gaudete, ocre de Noël, gris ardoise de la palette noire…),
  *   pendant que les bras restent blancs (croix de lumière). Choisi pour
  *   les baies sur vitrerie claire (Bay.kt).
  */
@@ -544,7 +736,7 @@ fun LiturgicalPalette.medallionShades(mode: MedallionMode): List<ColorRGBa> {
  * La couleur principale « lisible » d'une palette : la famille la plus
  * pesante dont la luminance est comprise entre 0,20 et 0,75, c'est-à-dire
  * ni presque blanche (le blanc de Noël) ni presque noire (l'anthracite de
- * la palette noire). Ordinaire → #3C7A4E, Avent → #5B3168, Rose → #B08093,
+ * la palette noire). Ordinaire → #3C7A4E, Avent → #5B3168, Rose → #D47A93,
  * Noël → #D9A441, Rouge → #A6242E, Marial → #2E5C9A, Noire → #57534C.
  */
 fun LiturgicalPalette.coloredMainShades(): List<ColorRGBa> {
@@ -616,27 +808,102 @@ object LiturgicalPalettes {
     )
 
     /**
-     * Blanc et or — Noël/Pâques (LiturgicalPaletteWhiteGold). Le drap
-     * d'or remplace canoniquement le blanc pour les grandes occasions
-     * (PGMR) — d'où la parité blanc/or dans ce document, contrairement
-     * à une première tentative improvisée (un or trop proche du
-     * moutarde, et une touche de bleu ajoutée par association
-     * hivernale plutôt que par recherche liturgique — retirée après
-     * vérification : le bleu ne fait pas partie des couleurs du rite
-     * romain).
+     * Blanc lumineux — Noël/Pâques (oct. 2026). Remplace la palette
+     * « blanc et or » (LiturgicalPaletteWhiteGold) : rien ne s'imprime en
+     * doré (ni brillant ni pailleté), et l'ocre, trop présent, faisait lire
+     * les œuvres comme « jaunes » alors que le BLANC est la couleur
+     * liturgique de référence de ces temps. Le problème n'était pas l'ocre
+     * lui-même mais sa place : il reste près du centre (gloire autour de la
+     * croix ou de l'ange, nimbe), là où il découpe la
+     * silhouette ; les blancs chauds et froids vont vers l'extérieur (rayons
+     * lointains, baie en nacre et champagne). Teintes et parts indicatives
+     * proposées par Astrea. Le bleu-gris très pâle (#D7E0E6) d'origine a
+     * été remplacé partout par un ocre très pâle (#F4E3BD), à sa demande.
+     *
+     * Les familles ci-dessous (avec leur part indicative) servent de
+     * référence et de repli ; la répartition réelle des rayons est radiale
+     * (luminous, RadialLuminousPaletteSystem).
+     *
+     * Ancienne palette, pour mémoire : ivory #F2ECD9 (22), pearl #FAF6EC
+     * (15), goldLight #F0C674 (15), gold #D9A441 (20), champagne #E5D8B8
+     * (10), goldAntique #9C6F24 (10).
      */
-    val NOEL = LiturgicalPalette(
-        name = "Blanc et or — Noël/Pâques",
+    private val LYS = ColorRGBa.fromHex("#FBF8F1")          // blanc lys
+    private val NACRE = ColorRGBa.fromHex("#F4F1EA")        // nacre
+    private val NACRE_FROIDE = ColorRGBa.fromHex("#E9EEF1") // nacre froide
+    private val CHAMPAGNE = ColorRGBa.fromHex("#ECE0C6")    // champagne
+    private val OCRE_PALE = ColorRGBa.fromHex("#EFD49A")    // ocre pâle
+    private val OCRE = ColorRGBa.fromHex("#D9A441")         // ocre, près du centre
+    // Ocre très pâle, à la place du bleu-gris très pâle #D7E0E6 : même
+    // teinte que l'ocre pâle, plus clair (luminosité HSL 0,85 au lieu de
+    // 0,77), et plus jaune que le champagne.
+    private val OCRE_TRES_PALE = ColorRGBa.fromHex("#F4E3BD")
+
+    /** Croix rayonnante et croix tréflée : zone ocre élargie. */
+    private val CROSS_RADIAL = RadialTable(
+        knots = listOf(0.0, 0.35, 0.55, 0.75, 1.0),
         families = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#F2ECD9")), 22.0), // ivory — corps principal blanc
-            PaletteFamily(listOf(ColorRGBa.fromHex("#FAF6EC")), 15.0), // pearl — halo lumineux
-            PaletteFamily(listOf(ColorRGBa.fromHex("#F0C674")), 15.0), // goldLight — gloire, auréole
-            PaletteFamily(listOf(ColorRGBa.fromHex("#D9A441")), 20.0), // gold — or de référence
-            PaletteFamily(listOf(ColorRGBa.fromHex("#E5D8B8")), 10.0), // champagne — transition
-            PaletteFamily(listOf(ColorRGBa.fromHex("#9C6F24")), 10.0)  // goldAntique — ancrage doré
+            listOf(OCRE) to listOf(60.0, 38.0, 12.0, 2.0, 0.0),
+            listOf(OCRE_PALE) to listOf(32.0, 34.0, 22.0, 6.0, 0.0),
+            listOf(CHAMPAGNE) to listOf(8.0, 14.0, 16.0, 9.0, 4.0),
+            listOf(LYS) to listOf(0.0, 7.0, 20.0, 28.0, 30.0),
+            listOf(NACRE) to listOf(0.0, 4.0, 15.0, 23.0, 25.0),
+            listOf(NACRE_FROIDE) to listOf(0.0, 3.0, 10.0, 19.0, 24.0),
+            listOf(OCRE_TRES_PALE) to listOf(0.0, 0.0, 5.0, 13.0, 16.0)
+        )
+    )
+
+    val NOEL = LiturgicalPalette(
+        name = "Blanc lumineux — Noël/Pâques",
+        families = listOf(
+            PaletteFamily(listOf(LYS), 25.0),
+            PaletteFamily(listOf(NACRE), 20.0),
+            PaletteFamily(listOf(NACRE_FROIDE), 15.0),
+            PaletteFamily(listOf(OCRE_TRES_PALE), 10.0),
+            PaletteFamily(listOf(CHAMPAGNE), 10.0),
+            PaletteFamily(listOf(OCRE_PALE), 12.0),
+            PaletteFamily(listOf(OCRE), 8.0)
         ),
-        // darkBronze — cœur de médaillon ("reste chaud, jamais noir pur").
-        seasonalMedallionShades = listOf(ColorRGBa.fromHex("#4A3312"))
+        // Ocre foncé — cœur réservé (poitrine de l'ange ; médaillon de la
+        // croix en MedallionMode.SEASONAL) : la teinte de l'ocre (#D9A441),
+        // assombrie (luminosité HSL 0,36). Remplace le brun darkBronze
+        // #4A3312 (oct. 2026) : élément chaud le plus sombre de l'image, au
+        // cœur de l'ange, il risquait de se lire comme un « trou » en grand
+        // format. Plus sombre que la tête et le nimbe, il ne se confond pas
+        // avec eux. Autres teintes comparées : brun plus clair #7B551E, ocre
+        // foncé plus clair #A87D2E.
+        seasonalMedallionShades = listOf(ColorRGBa.fromHex("#906C28")),
+        luminous = LuminousScheme(
+            // t : 0 = centre, 1 = bout des rayons les plus longs.
+            // Table de référence : poids réglés pour retrouver, en surface,
+            // les parts indicatives ci-dessus sur la croix rayonnante, avec les
+            // ocres au centre. Sert à la croix celtique, à la robe de l'ange
+            // et aux autres croix à rayons.
+            radial = RadialTable(
+                knots = listOf(0.0, 0.3, 0.5, 0.7, 1.0),
+                families = listOf(
+                    listOf(OCRE) to listOf(60.0, 30.0, 4.0, 0.0, 0.0),
+                    listOf(OCRE_PALE) to listOf(32.0, 34.0, 15.0, 3.0, 0.0),
+                    listOf(CHAMPAGNE) to listOf(8.0, 15.0, 14.0, 8.0, 4.0),
+                    listOf(LYS) to listOf(0.0, 10.0, 26.0, 30.0, 30.0),
+                    listOf(NACRE) to listOf(0.0, 6.0, 20.0, 24.0, 25.0),
+                    listOf(NACRE_FROIDE) to listOf(0.0, 4.0, 12.0, 20.0, 24.0),
+                    listOf(OCRE_TRES_PALE) to listOf(0.0, 0.0, 8.0, 14.0, 16.0)
+                )
+            ),
+            // Croix rayonnante et croix tréflée : zone ocre élargie, pour
+            // mieux faire ressortir la croix (CROSS_RADIAL, plus haut).
+            crossRadial = CROSS_RADIAL,
+            angelRayFamilies = listOf(
+                PaletteFamily(listOf(OCRE), 55.0),
+                PaletteFamily(listOf(OCRE_PALE), 35.0),
+                PaletteFamily(listOf(CHAMPAGNE), 10.0)
+            ),
+            ochre = listOf(OCRE),
+            white = listOf(LYS, NACRE),
+            quarries = listOf(NACRE, CHAMPAGNE, NACRE_FROIDE),
+            gradient = listOf(OCRE, OCRE_PALE, CHAMPAGNE, NACRE, NACRE_FROIDE)
+        )
     )
 
     /** Violet — Avent/Carême (LiturgicalPaletteViolet). */
@@ -701,16 +968,23 @@ object LiturgicalPalettes {
      * Version ravivée (oct. 2026) : la première version (roseMain #B08093,
      * saturation 0,23) était la plus grise des palettes colorées et
      * paraissait terne.
+     * Révision du 19 oct. 2026 (teintes d'Astrea) : palette ENTIÈREMENT
+     * rose, en cinq tons du blush au très foncé ; l'or doux (#E8B868) et le
+     * bronze rosé (#A55F4C) de la version précédente sont retirés. L'anneau
+     * des croix celtiques et la bordure des baies gardent l'or vif commun à
+     * toutes les palettes (BayStyle.BORDER_GOLD). Version précédente, pour
+     * mémoire : roseDeep #8C3D63 (18), roseMain #C4628F (32), roseLight
+     * #E59AB8 (20), rosePale #F5D5E1 (10), goldSoft #E8B868 (8), roseBronze
+     * #A55F4C (5).
      */
     val ROSE = LiturgicalPalette(
         name = "Rose — Gaudete/Laetare",
         families = listOf(
-            PaletteFamily(listOf(ColorRGBa.fromHex("#8C3D63")), 18.0), // roseDeep — ancrage
-            PaletteFamily(listOf(ColorRGBa.fromHex("#C4628F")), 32.0), // roseMain — corps principal
-            PaletteFamily(listOf(ColorRGBa.fromHex("#E59AB8")), 20.0), // roseLight — transmission
-            PaletteFamily(listOf(ColorRGBa.fromHex("#F5D5E1")), 10.0), // rosePale — halo
-            PaletteFamily(listOf(ColorRGBa.fromHex("#E8B868")), 8.0),  // goldSoft — reflets
-            PaletteFamily(listOf(ColorRGBa.fromHex("#A55F4C")), 5.0)   // roseBronze — contraste chaud
+            PaletteFamily(listOf(ColorRGBa.fromHex("#7A2E4A")), 18.0), // très foncé — ancrage
+            PaletteFamily(listOf(ColorRGBa.fromHex("#A84D6B")), 20.0), // foncé
+            PaletteFamily(listOf(ColorRGBa.fromHex("#D47A93")), 32.0), // moyen (framboise douce) — corps principal
+            PaletteFamily(listOf(ColorRGBa.fromHex("#E9A9B8")), 18.0), // clair — transmission
+            PaletteFamily(listOf(ColorRGBa.fromHex("#F4D3D8")), 12.0)  // très clair (blush) — halo
         ),
         // nearBlackMauve — écho du violet parent, cœur de médaillon.
         seasonalMedallionShades = listOf(ColorRGBa.fromHex("#3D2530"))

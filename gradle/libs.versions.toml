@@ -16,6 +16,7 @@ jsoup = "1.17.1"
 shadow = "9.1.0"
 runtime = "1.13.1"
 versions = "0.52.0"
+jts = "1.20.0"
 
 [libraries]
 kotlin-script-runtime = { group = "org.jetbrains.kotlin", name = "kotlin-script-runtime", version.ref = "kotlin" }
@@ -44,6 +45,7 @@ kotlin-logging = { group = "io.github.oshai", name = "kotlin-logging", version.r
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 csv = { group = "com.github.doyaaaaaken", name = "kotlin-csv-jvm", version.ref = "kotlinCsvJvm" }
+jts-core = { group = "org.locationtech.jts", name = "jts-core", version.ref = "jts" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

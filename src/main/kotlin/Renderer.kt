@@ -77,7 +77,16 @@ data class VitrailConfig(
     /** Baie en arc (bordure, fond en losanges, barlotières) autour de la
      *  composition — null = pas de baie (toutes les recettes existantes).
      *  Voir Bay.kt. */
-    val bay: BayStyle? = null
+    val bay: BayStyle? = null,
+
+    /** Format d'impression (taille réelle en mm et résolution) : taille de
+     *  l'export et cadre de la composition — null = export 3600 × 2700 px
+     *  (4:3), ou 3600 × 5400 px pour une baie. Voir PrintFormat.kt. */
+    val printFormat: PrintFormat? = null,
+
+    /** Couleurs de la rosace (ignorées hors RosaceGuide) — voir
+     *  RosaceSchemes, Rosace.kt. */
+    val rosaceScheme: RosaceScheme = RosaceSchemes.CATHEDRALE
 )
 
 /**
@@ -125,7 +134,14 @@ fun renderVitrail(
 
     // Baie : l'échelle du plomb suit la largeur de la BAIE (voir
     // bayPixelScale, Bay.kt), pas celle du canevas.
-    val pixelScale = config.bay?.let { bayPixelScale(it, canvasWidth, canvasHeight) } ?: requestedPixelScale
+    // Fond « champ de rayons » : l'échelle suit la largeur du FORMAT (voir
+    // RayFieldCompositionSystem.pixelScale, RayField.kt).
+    // Format d'impression : l'échelle suit la largeur du cadre (voir
+    // PrintFormat.pixelScale, PrintFormat.kt).
+    val pixelScale = config.bay?.let { bayPixelScale(it, canvasWidth, canvasHeight) }
+        ?: (config.compositionSystem as? RayFieldCompositionSystem)?.pixelScale(canvasWidth, canvasHeight)
+        ?: config.framedPrintFormat()?.pixelScale(canvasWidth, canvasHeight)
+        ?: requestedPixelScale
 
     val scaledCurvatureAmount = config.curvatureAmount * pixelScale
 
@@ -161,6 +177,14 @@ fun renderVitrail(
         cells.map { cell -> cell.map { Vector2(it.x + offset.x, it.y + offset.y) } }
     }
 
+    // Rosace : la pierre (disque plein) sous le verre. Les ouvertures du
+    // remplage sont ensuite recouvertes par les pièces de verre.
+    val frameOffset = config.framedPrintFormat()?.frame(canvasWidth, canvasHeight)
+        ?.let { Vector2(it[0], it[1]) } ?: Vector2(0.0, 0.0)
+    if (guide is RosaceGuide && bayGeometry == null) {
+        drawRosaceStone(targetDrawer, guide, frameOffset, config.rosaceScheme)
+    }
+
     // Remplissage (Palette + Verre)
     drawnCells.forEachIndexed { drawnIndex, cell ->
 
@@ -171,7 +195,10 @@ fun renderVitrail(
             return@forEachIndexed
         }
 
-        val contour = createCurvedContour(cell, edgeCurveCache, scaledCurvatureAmount)
+        // Rosace : arêtes droites (ses courbes sont faites de nombreux petits
+        // segments), contour construit directement, sans le cache d'arêtes.
+        val contour = if (guide is RosaceGuide) straightContour(cell)
+        else createCurvedContour(cell, edgeCurveCache, scaledCurvatureAmount)
 
         val cellCenter = polygonCentroid(cell)
         val bounds = contour.bounds
@@ -221,6 +248,11 @@ fun renderVitrail(
 
     // Bordures (Plomb)
     config.leadSystem.draw(targetDrawer, drawnCells, edgeCurveCache, scaledCurvatureAmount, leadStyle)
+
+    // Rosace : contour extérieur de la pierre.
+    if (guide is RosaceGuide && bayGeometry == null) {
+        drawRosaceRim(targetDrawer, guide, frameOffset, leadStyle.color, leadStyle.width)
+    }
 
     // Baie : grand plomb du pourtour et barlotières, par-dessus tout.
     if (config.bay != null && bayGeometry != null) {
@@ -279,8 +311,12 @@ private fun computeVitrail(
     // Baie : la composition est générée dans le rectangle de la fenêtre
     // (mêmes tirages que sans baie), puis la baie est assemblée autour.
     val bayGeometry = config.bay?.let { bayGeometry(it, canvasWidth, canvasHeight) }
-    val contentWidth = bayGeometry?.generationWidth ?: canvasWidth
-    val contentHeight = bayGeometry?.generationHeight ?: canvasHeight
+    // Format d'impression : la composition est générée dans un cadre aux
+    // proportions du format (mêmes tirages), puis placée au centre du
+    // canevas (voir PrintFormat.kt).
+    val printFrame = config.framedPrintFormat()?.frame(canvasWidth, canvasHeight)
+    val contentWidth = bayGeometry?.generationWidth ?: printFrame?.get(2) ?: canvasWidth
+    val contentHeight = bayGeometry?.generationHeight ?: printFrame?.get(3) ?: canvasHeight
 
     // Système 1 — Composition
     val guide = config.compositionSystem.generate(
@@ -299,24 +335,45 @@ private fun computeVitrail(
     )
 
     // Système 3 — Palette
-    val cellColors = config.paletteSystem.assignColors(cells, random).toMutableList()
+    // (Un GuidedPaletteSystem reçoit aussi la composition : répartition
+    // radiale de la palette « blanc lumineux », voir Palette.kt. Mêmes
+    // tirages que les autres systèmes : une famille et une nuance par
+    // cellule.)
+    val paletteSystem = config.paletteSystem
+    val cellColors = (
+            if (paletteSystem is GuidedPaletteSystem) paletteSystem.assignColors(guide, cells, random)
+            else paletteSystem.assignColors(cells, random)
+            ).toMutableList()
 
     // Post-traitements SPÉCIFIQUES aux compositions emblématiques (voir
     // Palette.kt) :
     // - croix rayonnante : bras forcés en blanc cassé, médaillon selon
     //   MedallionMode (applyRadiantCrossColors) ;
+    // - croix dessinées, tréflée ou celtique : mêmes couleurs de bras et
+    //   de médaillon (applyShapedCrossColors, ShapedCross.kt) ;
     // - ange rayonnant : poitrine sombre (teinte de la saison), tête et
     //   ailes en blanc cassé, nimbe doré, cou et robe en ivoire doré
     //   (applyRadiantAngelColors) ;
     // - motif raccordable : champ de couleur périodique
     //   (applyPeriodicColorField) ;
     // - famille végétale : couleur selon le rôle de chaque pièce
-    //   (applyBotanicalColors, Botanical.kt).
+    //   (applyBotanicalColors, Botanical.kt) ;
+    // - fond « champ de rayons » : teintes alternées d'un rayon à l'autre
+    //   (applyRayFieldColors, RayField.kt) ;
+    // - rosace : couleur selon le type et la position de chaque pièce
+    //   (applyRosaceColors, Rosace.kt ; aucun tirage).
     // ⚠ Consomment des tirages de random : garder cet appel à cet endroit.
     when (guide) {
         is CompositionGuide.RadiantCross -> applyRadiantCrossColors(
             guide = guide,
             cells = cells,
+            cellColors = cellColors,
+            armShades = config.crossArmShades,
+            medallionShades = config.crossMedallionShades,
+            random = random
+        )
+        is ShapedCrossGuide -> applyShapedCrossColors(
+            guide = guide,
             cellColors = cellColors,
             armShades = config.crossArmShades,
             medallionShades = config.crossMedallionShades,
@@ -346,6 +403,18 @@ private fun computeVitrail(
             palette = config.botanicalPalette,
             random = random
         )
+        is RayFieldGuide -> applyRayFieldColors(
+            guide = guide,
+            cellColors = cellColors,
+            random = random
+        )
+        // Rosace : aucun tirage (couleurs fixées par le type et la
+        // position de chaque pièce, pour une symétrie stricte).
+        is RosaceGuide -> applyRosaceColors(
+            guide = guide,
+            cellColors = cellColors,
+            scheme = config.rosaceScheme
+        )
         else -> {}
     }
 
@@ -356,6 +425,15 @@ private fun computeVitrail(
         val (bayCells, bayColors, bayMaterial) =
             assembleBay(config, config.bay, bayGeometry, cells, cellColors, materialVariation)
         return GeneratedVitrail(guide, bayCells, bayColors, bayMaterial, bayGeometry)
+    }
+
+    // Format d'impression : pièces décalées dans le cadre centré (après tous
+    // les tirages et post-traitements, qui travaillent dans le cadre).
+    if (printFrame != null && (printFrame[0] != 0.0 || printFrame[1] != 0.0)) {
+        val dx = printFrame[0]
+        val dy = printFrame[1]
+        val placed = cells.map { cell -> cell.map { Vector2(it.x + dx, it.y + dy) } }
+        return GeneratedVitrail(guide, placed, cellColors, materialVariation)
     }
 
     return GeneratedVitrail(guide, cells, cellColors, materialVariation)

@@ -138,6 +138,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.slf4j.api)
     implementation(libs.kotlin.logging)
+    implementation(libs.jts.core)
 
     when (applicationLogging) {
         Logging.NONE -> runtimeOnly(libs.slf4j.nop)

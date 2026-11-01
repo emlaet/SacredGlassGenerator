@@ -58,8 +58,10 @@ enum class QuarryTone {
      * les rayons trop proches de ce fond sont retirés (raysFamiliesFor).
      * Le nom MUTED est historique : la première version mêlait la couleur
      * à un gris sombre, ce qui la rendait terne (bleu gris, vert gris…).
-     * Exceptions : Noël (or pâle), Rose (rose pâle) et la palette noire,
-     * déjà grise (mélange au gris conservé).
+     * Exceptions : Rose (rose pâle) et la palette noire, déjà grise
+     * (mélange au gris conservé). La palette « blanc lumineux » de
+     * Noël/Pâques a sa propre vitrerie, nacre et champagne (LuminousScheme,
+     * Palette.kt), quel que soit le ton choisi.
      */
     MUTED
 }
@@ -160,9 +162,10 @@ data class BayStyle(
          *   0,28), teinte et saturation conservées — voir QuarryTone.MUTED.
          *   Palette noire, déjà grise : mêlée à 70 % d'un gris sombre.
          *   Exceptions, pour les fêtes joyeuses (joie plutôt que contraste) :
-         *   quand la couleur principale est claire (l'or de Noël), le gris
-         *   la rendrait kaki et terne ; le fond est alors l'or pâle du motif
-         *   de Pâques. Pour la palette rose (Gaudete, Laetare), le gris
+         *   quand la couleur principale est claire, le gris la rendrait kaki
+         *   et terne ; le fond est alors l'or pâle du motif de Pâques (cas de
+         *   l'ancienne palette « blanc et or » de Noël, sans objet depuis la
+         *   palette « blanc lumineux », traitée à part — voir plus bas). Pour la palette rose (Gaudete, Laetare), le gris
          *   donnerait un mauve grisâtre ; le fond est un rose pâle
          *   (ROSE_PALE_QUARRIES).
          * Bordure : ALTERNATE (par défaut), BLACK (verre noir, très sobre) ou
@@ -180,6 +183,19 @@ data class BayStyle(
             border: BorderMode = BorderMode.ALTERNATE
         ): BayStyle {
             val main = palette.coloredMainShades()
+            // Palette « blanc lumineux » (Noël/Pâques, voir LuminousScheme,
+            // Palette.kt) : vitrerie en nacre et champagne, bordure alternant
+            // l'ocre et le blanc. Pas d'or vif : rien ne s'imprime en doré.
+            val lum = palette.luminous
+            if (lum != null) {
+                val borderShades = when (border) {
+                    BorderMode.ALTERNATE -> listOf(lum.ochre, lum.white)
+                    BorderMode.BLACK -> listOf(listOf(ColorRGBa.fromHex("#16120F"), ColorRGBa.fromHex("#1B1714"), ColorRGBa.fromHex("#120F0D")))
+                    BorderMode.NONE -> listOf(lum.white)
+                }
+                return BayStyle(arch = arch, borderShades = borderShades, quarryShades = lum.quarries,
+                    showBorder = border != BorderMode.NONE)
+            }
             // bordure : si l'accent est presque de la même valeur que la
             // couleur principale (l'or de Noël avec l'or par défaut), on
             // alterne plutôt avec la famille la plus claire de la palette
@@ -202,7 +218,7 @@ data class BayStyle(
                     if (palette == LiturgicalPalettes.ROSE) {
                         ROSE_PALE_QUARRIES
                     } else if (luminance(m) > 0.60) {
-                        // couleur principale claire (or de Noël) : on garde un
+                        // couleur principale claire (ancien or de Noël) : on garde un
                         // fond lumineux, l'or pâle du motif de Pâques
                         // (BotanicalPalettes.PAQUES_FLEURS, Botanical.kt) — la
                         // joie de la fête prime sur le contraste de la croix
@@ -285,7 +301,25 @@ data class BayStyle(
         fun rel(c: ColorRGBa) = 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
         val bg = quarryShades.map { rel(it) }.average()
         fun contrast(c: ColorRGBa): Double { val l = rel(c); return (max(l, bg) + 0.05) / (min(l, bg) + 0.05) }
-        return families.filter { f -> f.shades.map { contrast(it) }.average() >= minContrast }.ifEmpty { families }
+        val kept = families.filter { f -> f.shades.map { contrast(it) }.average() >= minContrast }
+        // Fond clair (ancienne palette de Noël, or pâle) : presque toute la palette est trop
+        // claire pour s'y lire ; il ne restait qu'une famille (le bronze),
+        // et tous les rayons paraissaient de la même teinte. On ajoute
+        // alors trois teintes de la couleur la plus vive de la palette,
+        // assombries jusqu'à trois niveaux de contraste (2,2 ; 4,5 ; 7,5) :
+        // des rayons ambre, or bruni et bronze, bien distincts à l'œil.
+        if (kept.size < 3 && bg > 0.4) {
+            val vivid = families.maxByOrNull { hsl(it.shades.first())[1] }!!.shades.first()
+            val (h, s, l0) = hsl(vivid)
+            val weight = families.map { it.weight }.average()
+            val extra = listOf(2.2, 4.5, 7.5).map { target ->
+                var l = l0
+                while (contrast(fromHsl(h, s, l)) < target && l > 0.02) l -= 0.002
+                PaletteFamily(listOf(fromHsl(h, s, l)), weight)
+            }
+            return kept + extra
+        }
+        return kept.ifEmpty { families }
     }
 }
 
