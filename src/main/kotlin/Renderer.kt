@@ -86,7 +86,12 @@ data class VitrailConfig(
 
     /** Couleurs de la rosace (ignorées hors RosaceGuide) — voir
      *  RosaceSchemes, Rosace.kt. */
-    val rosaceScheme: RosaceScheme = RosaceSchemes.CATHEDRALE
+    val rosaceScheme: RosaceScheme = RosaceSchemes.CATHEDRALE,
+
+    /** Palette par rôles des nouveaux dessins de rosace (rosace médiévale
+     *  sobre ; ignorée par la rosace rayonnante, qui suit rosaceScheme) —
+     *  voir RosacePalettes, Rosace.kt. */
+    val rosacePalette: RosacePalette = RosacePalettes.GRENAT_OR
 )
 
 /**
@@ -182,7 +187,7 @@ fun renderVitrail(
     val frameOffset = config.framedPrintFormat()?.frame(canvasWidth, canvasHeight)
         ?.let { Vector2(it[0], it[1]) } ?: Vector2(0.0, 0.0)
     if (guide is RosaceGuide && bayGeometry == null) {
-        drawRosaceStone(targetDrawer, guide, frameOffset, config.rosaceScheme)
+        drawRosaceStone(targetDrawer, guide, frameOffset, rosaceStoneColor(guide, config.rosaceScheme, config.rosacePalette))
     }
 
     // Remplissage (Palette + Verre)
@@ -247,10 +252,20 @@ fun renderVitrail(
     }
 
     // Bordures (Plomb)
-    config.leadSystem.draw(targetDrawer, drawnCells, edgeCurveCache, scaledCurvatureAmount, leadStyle)
+    // (Rosaces B et C : les plombs entre les pièces sont les plus fins de la
+    // hiérarchie, RosaceGuide.cellLeadFactor ; les plus épais suivent.)
+    // Leur couleur peut aussi différer (RosacePalette.leadFine : « contour
+    // décoratif » plus clair que les plombs de structure).
+    val cellLeadStyle = if (guide is RosaceGuide && guide.cellLeadFactor != 1.0)
+        leadStyle.copy(
+            width = leadStyle.width * guide.cellLeadFactor,
+            color = config.rosacePalette.leadFine ?: leadStyle.color
+        ) else leadStyle
+    config.leadSystem.draw(targetDrawer, drawnCells, edgeCurveCache, scaledCurvatureAmount, cellLeadStyle)
 
-    // Rosace : contour extérieur de la pierre.
+    // Rosace : plombs épais (dessins B et C), puis contour extérieur.
     if (guide is RosaceGuide && bayGeometry == null) {
+        drawRosaceLeadLines(targetDrawer, guide, frameOffset, leadStyle.color, leadStyle.width)
         drawRosaceRim(targetDrawer, guide, frameOffset, leadStyle.color, leadStyle.width)
     }
 
@@ -413,7 +428,8 @@ private fun computeVitrail(
         is RosaceGuide -> applyRosaceColors(
             guide = guide,
             cellColors = cellColors,
-            scheme = config.rosaceScheme
+            scheme = config.rosaceScheme,
+            palette = config.rosacePalette
         )
         else -> {}
     }

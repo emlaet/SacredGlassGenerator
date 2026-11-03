@@ -12,6 +12,7 @@ import org.locationtech.jts.operation.overlayng.OverlayNGRobust
 import org.locationtech.jts.operation.polygonize.Polygonizer
 import org.openrndr.color.ColorRGBa
 import org.openrndr.draw.Drawer
+import org.openrndr.draw.LineCap
 import org.openrndr.draw.isolated
 import org.openrndr.math.Vector2
 import org.openrndr.shape.Segment2D
@@ -82,18 +83,37 @@ class RosacePiece(
     val angle: Double
 )
 
+/** Un plomb d'une épaisseur particulière (hiérarchie des plombs), en pixels du cadre. */
+class RosaceLeadLine(
+    val points: List<Vector2>,
+    val closed: Boolean,
+    /** Épaisseur en multiple de LeadStyle.width (la largeur de la recette). */
+    val factor: Double
+)
+
 /** La rosace découpée, en coordonnées du canevas. */
 class RosaceGuide(
     /** Les pièces de verre, en pixels du cadre (une cellule par pièce). */
     val pieces: List<List<Vector2>>,
-    /** La géométrie d'origine (en unités) : sert au calcul des couleurs. */
-    val geometry: RosaceGeometry,
+    /** La géométrie d'origine (en unités) : sert au calcul des couleurs ;
+     *  null pour les dessins B et C (RosaceStyles.kt), dont chaque pièce
+     *  porte directement son rôle de couleur (RosacePiece.role). */
+    val geometry: RosaceGeometry?,
     /** Les mêmes pièces en unités, dans le même ordre que pieces. */
     val unitPieces: List<RosacePiece>,
     /** Centre de la rosace, en pixels du cadre. */
     val center: Vector2,
     /** Rayon extérieur de la pierre, en pixels du cadre. */
-    val radius: Double
+    val radius: Double,
+    /** Remplage en pierre sous le verre (false : dessins C, tout en verre). */
+    val hasStone: Boolean = true,
+    /** Épaisseur des plombs entre les pièces, en multiple de LeadStyle.width
+     *  (dessins B et C : 0,6, les plombs fins ; les plombs plus épais sont
+     *  dans leadLines). */
+    val cellLeadFactor: Double = 1.0,
+    /** Plombs plus épais (structure, secondaires), tracés par-dessus les
+     *  plombs fins ; vide pour la rosace rayonnante et le dessin A. */
+    val leadLines: List<RosaceLeadLine> = emptyList()
 ) : CompositionGuide()
 
 /**
@@ -111,29 +131,76 @@ data class RosaceCompositionSystem(
 ) : CompositionSystem {
 
     override fun generate(width: Double, height: Double, targetRegions: Int, random: Random): CompositionGuide {
-        val geometry = RosaceGeometry.of(rotations)
-        val center = Vector2(width / 2.0, height / 2.0)
-        val radius = 0.5 * min(width, height) * sizeRatio
-        val o = orientationDegrees * PI / 180.0
-        val co = cos(o)
-        val so = sin(o)
-        val pieces = geometry.pieces.map { piece ->
-            val coords = piece.polygon.exteriorRing.coordinates
-            // Anneau fermé : le dernier point répète le premier.
-            (0 until coords.size - 1).map { k ->
-                val u = coords[k].x
-                val v = coords[k].y
-                Vector2(center.x + radius * (u * co - v * so), center.y + radius * (u * so + v * co))
-            }
-        }
-        return RosaceGuide(pieces, geometry, geometry.pieces, center, radius)
+        return placeRosace(RosaceGeometry.of(rotations), width, height, sizeRatio, orientationDegrees)
     }
+}
+
+/**
+ * Rosace A — MÉDIÉVALE SOBRE (dessin retenu le 1er nov. 2026). Le même
+ * remplage que la rosace rayonnante, réduit à son architecture :
+ * - plus de réseau de losanges ni de filets de bordure : les lancettes sont
+ *   coupées en grands panneaux par des traverses ;
+ * - plus de quadrilobes au bord : les meneaux de la couronne vont jusqu'au
+ *   cercle extérieur ;
+ * - oculus central agrandi (× 1,45), découpé en un cœur rond et une pièce
+ *   par lobe.
+ * Environ 300 pièces pour 12 rotations (contre près de 2 600). Couleurs :
+ * une RosacePalette (VitrailConfig.rosacePalette), pas un RosaceScheme.
+ * Mêmes réglages que RosaceCompositionSystem ; prototype : design_A2 de
+ * claude/prototype_rosace_trois_styles.py (documents du projet).
+ */
+data class MedievalRosaceCompositionSystem(
+    val rotations: Int = 12,
+    val sizeRatio: Double = 0.96,
+    val orientationDegrees: Double = -90.0,
+    /** Diamètre du médaillon central (polylobe et cœur), en multiple de celui
+     *  du prototype validé : 1,10 = agrandi de 10 % (brief du 2 nov. 2026). */
+    val medallionScale: Double = 1.10,
+    /** Hauteur des panneaux des lancettes de l'étoile (traverses), en unités
+     *  de la rosace : 0,09 dans le prototype (3 panneaux par lancette) ;
+     *  0,15 = 2 panneaux, une étoile plus aérée (brief du 2 nov. 2026). */
+    val starPanelHeight: Double = 0.15
+) : CompositionSystem {
+
+    override fun generate(width: Double, height: Double, targetRegions: Int, random: Random): CompositionGuide {
+        val geometry = RosaceGeometry.of(rotations, sober = true, medallionScale = medallionScale, starPanelHeight = starPanelHeight)
+        return placeRosace(geometry, width, height, sizeRatio, orientationDegrees)
+    }
+}
+
+/**
+ * Passage des unités de la rosace (rayon 1, axe du premier secteur sur
+ * l'angle 0) aux pixels du cadre : rosace centrée, de diamètre sizeRatio ×
+ * le petit côté, premier axe orienté selon orientationDegrees.
+ */
+class RosacePlacement(width: Double, height: Double, sizeRatio: Double, orientationDegrees: Double) {
+    val center = Vector2(width / 2.0, height / 2.0)
+    val radius = 0.5 * min(width, height) * sizeRatio
+    private val co = cos(orientationDegrees * PI / 180.0)
+    private val so = sin(orientationDegrees * PI / 180.0)
+
+    fun map(u: Double, v: Double) = Vector2(center.x + radius * (u * co - v * so), center.y + radius * (u * so + v * co))
+
+    /** Contour d'un polygone (anneau fermé : le dernier point, qui répète le premier, est omis). */
+    fun cell(p: Polygon): List<Vector2> {
+        val coords = p.exteriorRing.coordinates
+        return (0 until coords.size - 1).map { k -> map(coords[k].x, coords[k].y) }
+    }
+}
+
+/** Place une géométrie de rosace (unités, rayon 1) au centre du cadre. */
+private fun placeRosace(
+    geometry: RosaceGeometry, width: Double, height: Double, sizeRatio: Double, orientationDegrees: Double
+): RosaceGuide {
+    val pl = RosacePlacement(width, height, sizeRatio, orientationDegrees)
+    val pieces = geometry.pieces.map { pl.cell(it.polygon) }
+    return RosaceGuide(pieces, geometry, geometry.pieces, pl.center, pl.radius)
 }
 
 /** Les pièces de la rosace, telles que construites (une par cellule). */
 class RosaceSegmentationSystem : SegmentationSystem {
     override fun segment(guide: CompositionGuide, width: Double, height: Double, random: Random): List<List<Vector2>> {
-        require(guide is RosaceGuide) { "RosaceSegmentationSystem nécessite un RosaceGuide (RosaceCompositionSystem)" }
+        require(guide is RosaceGuide) { "RosaceSegmentationSystem nécessite un RosaceGuide (une des rosaces de Rosace.kt ou RosaceStyles.kt)" }
         return guide.pieces
     }
 }
@@ -296,9 +363,14 @@ object RosaceSchemes {
     /** Rose (Gaudete, Laetare), pensée pour un intérieur contemporain : ROSE
      *  POUDRÉ dominant, en dialogue avec un BLEU NUIT (étoile de l'anneau
      *  intérieur, petits écoinçons, lunules) ; ocre et blush en accents.
-     *  Toutes les teintes sont nouvelles. Essais de roses plus riches : ROSE_RICHE_1 à
-     *  ROSE_RICHE_4 (plus bas). Versions précédentes, jugées « rose bonbon » puis « vieillottes » :
-     *  #A84D6B / #D47A93, puis vieux rose #8C4F6C et vert sauge #4F7F6E. */
+     *  Toutes les teintes sont nouvelles. Versions précédentes, jugées « rose bonbon » puis « vieillottes » :
+     *  #A84D6B / #D47A93, puis vieux rose #8C4F6C et vert sauge #4F7F6E.
+     *  À REMPLACER plus tard par une palette tirée des palettes retenues pour
+     *  Gaudete et Laetare (RosacePalettes, plus bas). Les quatorze essais roses
+     *  du 28 oct. 2026 (ROSE_RICHE_1 à 4, ROSE_JOIE…, ROSE_SAUGE, ROSE_PETROLE,
+     *  ROSE_ARDOISE, ROSE_OLIVE, ROSE_LAITON) ont été retirés le 1er nov. 2026 :
+     *  aucun n'a été retenu (historique dans « Récapitulatif rosaces
+     *  2026-11-01 », documents du projet). */
     val ROSE = RosaceScheme(
         name = "Rose",
         outerField = c("#C27A92") to c("#B06E85"),
@@ -313,259 +385,6 @@ object RosaceSchemes {
         lune = c("#26345E"),
         petal = c("#D898AC"),
         plain = c("#7A3550")
-    )
-
-    // ROSES RICHES (28 oct. 2026). Les essais rose poudré et aubergine (retirés)
-    // paraissaient froids et réduits à deux couleurs. Ici : des roses CHAUDS
-    // (tirant vers la pêche ou l'abricot, ni froids ni grisés), deux teintes
-    // différentes qui alternent dans l'anneau extérieur, l'aubergine pour
-    // l'étoile et les fonds, et une TROISIÈME couleur d'accompagnement (miel,
-    // bleu canard, abricot ou vert olive) dans les petits écoinçons et les
-    // bordures ; trèfles miel (#E7B04F) et ivoire rosé. Pierre crème
-    // (#E6DCCB) par défaut. Toutes les teintes sont nouvelles.
-
-    /** Rose riche 1 — rose pêche, aubergine et miel : deux roses pêche alternés (#E9B3A9, #E2A3A0), étoile aubergine (#7A2A5E, #5E1F4A), petits écoinçons et bordures miel (#D9A45A), trèfles miel et ivoire rosé. */
-    val ROSE_RICHE_1 = RosaceScheme(
-        name = "Rose, aubergine et miel",
-        outerField = c("#E9B3A9") to c("#E2A3A0"),
-        innerField = c("#7A2A5E") to c("#5E1F4A"),
-        fillet = c("#F8E6DC") to c("#D9A45A"),
-        core = c("#E7B04F"),
-        oculusInner = c("#E9B3A9"),
-        oculusOuter = c("#5E1F4A"),
-        innerSpandrel = c("#3E1236"),
-        outerSpandrel = c("#D9A45A"),
-        foil = c("#E7B04F") to c("#FBEDE6"),
-        lune = c("#3E1236"),
-        petal = c("#F1CFC2"),
-        plain = c("#3E1236"),
-        stone = c("#E6DCCB")
-    )
-
-    /** Rose riche 2 — rose, aubergine et bleu canard : roses chauds alternés (#E6A9A6, #ECBDB3), étoile aubergine, une touche de bleu canard (#2F6F73) dans les petits écoinçons et les bordures. */
-    val ROSE_RICHE_2 = RosaceScheme(
-        name = "Rose, aubergine et canard",
-        outerField = c("#E6A9A6") to c("#ECBDB3"),
-        innerField = c("#6E2358") to c("#561C46"),
-        fillet = c("#FBEDE6") to c("#2F6F73"),
-        core = c("#E7B04F"),
-        oculusInner = c("#E6A9A6"),
-        oculusOuter = c("#561C46"),
-        innerSpandrel = c("#3A1232"),
-        outerSpandrel = c("#2F6F73"),
-        foil = c("#E7B04F") to c("#FBEDE6"),
-        lune = c("#3A1232"),
-        petal = c("#F3D2C8"),
-        plain = c("#3A1232"),
-        stone = c("#E6DCCB")
-    )
-
-    /** Rose riche 3 — rose, abricot et aubergine : un rose (#EBAFB1) et un abricot (#F0BC98) alternés dans l'anneau extérieur, étoile aubergine, écoinçons abricot soutenu (#D98E6B). */
-    val ROSE_RICHE_3 = RosaceScheme(
-        name = "Rose, abricot et aubergine",
-        outerField = c("#EBAFB1") to c("#F0BC98"),
-        innerField = c("#7D2C5F") to c("#62224B"),
-        fillet = c("#FBEDE6") to c("#7D2C5F"),
-        core = c("#E9B05A"),
-        oculusInner = c("#EBAFB1"),
-        oculusOuter = c("#62224B"),
-        innerSpandrel = c("#3E1236"),
-        outerSpandrel = c("#D98E6B"),
-        foil = c("#E9B05A") to c("#F7DED6"),
-        lune = c("#3E1236"),
-        petal = c("#F7DED6"),
-        plain = c("#3E1236"),
-        stone = c("#E6DCCB")
-    )
-
-    /** Rose riche 4 — rose, aubergine et vert olive : roses pêche alternés, étoile aubergine, une touche de vert olive (#5E6B3A) dans les petits écoinçons et les bordures. */
-    val ROSE_RICHE_4 = RosaceScheme(
-        name = "Rose, aubergine et olive",
-        outerField = c("#E9B3A9") to c("#ECBDB3"),
-        innerField = c("#7A2A5E") to c("#5E1F4A"),
-        fillet = c("#FBEDE6") to c("#5E6B3A"),
-        core = c("#E7B04F"),
-        oculusInner = c("#E9B3A9"),
-        oculusOuter = c("#5E1F4A"),
-        innerSpandrel = c("#3E1236"),
-        outerSpandrel = c("#5E6B3A"),
-        foil = c("#E7B04F") to c("#FBEDE6"),
-        lune = c("#3E1236"),
-        petal = c("#F1CFC2"),
-        plain = c("#3E1236"),
-        stone = c("#E6DCCB")
-    )
-
-    // ROSES DE LA JOIE (28 oct. 2026). Gaudete et Laetare : le rose dit la joie
-    // au cœur d'un temps de pénitence et d'attente ; un centre sombre (prune,
-    // aubergine) la contredit. Ici, le CENTRE EST CLAIR : l'étoile centrale
-    // alterne rose pâle et ivoire (ou ivoire et champagne), les pétales sont
-    // roses, et la couleur profonde est réduite aux fonds entre les grandes
-    // lancettes (4 % du verre). Anneau extérieur rose et rose pâle, accent
-    // sauge dans les petits écoinçons et les lunules, trèfles et cœur laiton
-    // doux. Pierre crème, plombs charbon doux (#292B2B).
-
-    /** rose #D69AA7, rose pâle #EBD2D5, prune clair #8F6A86 (fonds seulement), sauge #758E87, ivoire #E8DFD0, laiton doux #C2A36B : la « version 5 ajustée ». */
-    val ROSE_JOIE = RosaceScheme(
-        name = "Joie — rose, sauge et laiton",
-        outerField = c("#D69AA7") to c("#EBD2D5"),
-        innerField = c("#EBD2D5") to c("#E8DFD0"),
-        fillet = c("#E8DFD0") to c("#D69AA7"),
-        core = c("#C2A36B"),
-        oculusInner = c("#EBD2D5"),
-        oculusOuter = c("#D69AA7"),
-        innerSpandrel = c("#8F6A86"),
-        outerSpandrel = c("#758E87"),
-        foil = c("#C2A36B") to c("#E8DFD0"),
-        lune = c("#758E87"),
-        petal = c("#D69AA7"),
-        plain = c("#8F6A86"),
-        stone = c("#E6DCCB"),
-        lead = c("#292B2B")
-    )
-
-    /** les teintes de ROSE_SAUGE (rose poudré #D9A3AE, porcelaine #EAD0D1, sauge #78918A, ivoire #E6DCC8), la prune sourde #75465F réduite aux fonds, trèfles laiton #C2A36B. */
-    val ROSE_JOIE_POUDRE = RosaceScheme(
-        name = "Joie — rose poudré et sauge",
-        outerField = c("#D9A3AE") to c("#EAD0D1"),
-        innerField = c("#EAD0D1") to c("#E6DCC8"),
-        fillet = c("#E6DCC8") to c("#D9A3AE"),
-        core = c("#C2A36B"),
-        oculusInner = c("#EAD0D1"),
-        oculusOuter = c("#D9A3AE"),
-        innerSpandrel = c("#75465F"),
-        outerSpandrel = c("#78918A"),
-        foil = c("#C2A36B") to c("#E6DCC8"),
-        lune = c("#78918A"),
-        petal = c("#D9A3AE"),
-        plain = c("#75465F"),
-        stone = c("#E6DCCB"),
-        lead = c("#292B2B")
-    )
-
-    /** comme ROSE_JOIE, mais l'étoile centrale en ivoire et champagne (#F3E9D6, #EAD9B4), une « gloire » lumineuse. */
-    val ROSE_JOIE_GLOIRE = RosaceScheme(
-        name = "Joie — gloire",
-        outerField = c("#D69AA7") to c("#EBD2D5"),
-        innerField = c("#F3E9D6") to c("#EAD9B4"),
-        fillet = c("#E8DFD0") to c("#D69AA7"),
-        core = c("#C2A36B"),
-        oculusInner = c("#EBD2D5"),
-        oculusOuter = c("#D69AA7"),
-        innerSpandrel = c("#8F6A86"),
-        outerSpandrel = c("#758E87"),
-        foil = c("#C2A36B") to c("#EBD2D5"),
-        lune = c("#758E87"),
-        petal = c("#D69AA7"),
-        plain = c("#8F6A86"),
-        stone = c("#E6DCCB"),
-        lead = c("#292B2B")
-    )
-
-    // PALETTES PROPOSÉES PAR ASTREA (28 oct. 2026), avec leur répartition
-    // conseillée : environ 50 % de clairs (rose pâle, ivoire), 25 % du rose
-    // principal, 15 % de la couleur profonde, 10 % de l'accent. Réalisée ainsi
-    // (surfaces de verre mesurées, 12 rotations) : rose principal et rose pâle
-    // en alternance dans l'anneau extérieur, rose pâle et ivoire en alternance
-    // dans les bordures, rose principal dans les pétales ; couleur profonde
-    // dans l'étoile centrale et les fonds ; accent dans les petits écoinçons
-    // et un trèfle sur deux. Résultat : clairs 46 à 48 %, rose 23 à 28 %,
-    // profond 15 à 20 %, accent 9 %. Teintes dérivées (alternance des
-    // losanges) : variante 12 % plus sombre de la couleur profonde. Pierre
-    // crème ; plombs de la couleur indiquée (voir RosaceScheme.lead).
-
-    /** rose poudré #D9A3AE, rose porcelaine #EAD0D1, prune sourde #75465F, vert sauge #78918A, ivoire chaud #E6DCC8, plombs charbon doux #292B2B. */
-    val ROSE_SAUGE = RosaceScheme(
-        name = "Rose, prune et sauge",
-        outerField = c("#D9A3AE") to c("#EAD0D1"),
-        innerField = c("#75465F") to c("#673E54"),
-        fillet = c("#E6DCC8") to c("#EAD0D1"),
-        core = c("#E6DCC8"),
-        oculusInner = c("#D9A3AE"),
-        oculusOuter = c("#75465F"),
-        innerSpandrel = c("#75465F"),
-        outerSpandrel = c("#78918A"),
-        foil = c("#E6DCC8") to c("#78918A"),
-        lune = c("#75465F"),
-        petal = c("#D9A3AE"),
-        plain = c("#75465F"),
-        stone = c("#E6DCCB"),
-        lead = c("#292B2B")
-    )
-
-    /** rose argile #C78389, rose nude #E7C2BF, bordeaux prune #762F49, bleu pétrole #285B60, sable clair #D6C5A8, plombs anthracite #303033. */
-    val ROSE_PETROLE = RosaceScheme(
-        name = "Rose, bordeaux et pétrole",
-        outerField = c("#C78389") to c("#E7C2BF"),
-        innerField = c("#762F49") to c("#682940"),
-        fillet = c("#D6C5A8") to c("#E7C2BF"),
-        core = c("#D6C5A8"),
-        oculusInner = c("#C78389"),
-        oculusOuter = c("#762F49"),
-        innerSpandrel = c("#762F49"),
-        outerSpandrel = c("#285B60"),
-        foil = c("#D6C5A8") to c("#285B60"),
-        lune = c("#762F49"),
-        petal = c("#C78389"),
-        plain = c("#762F49"),
-        stone = c("#E6DCCB"),
-        lead = c("#303033")
-    )
-
-    /** rose brume #D5AAB8, rose très pâle #F0DDE0, lilas grisé #9B87A6 (en alternance avec le rose brume dans l'étoile), bleu ardoise #708596, gris coquille #E9E4DF, prune charbon #37343C (fonds et plombs). */
-    val ROSE_ARDOISE = RosaceScheme(
-        name = "Rose, lilas et ardoise",
-        outerField = c("#D5AAB8") to c("#F0DDE0"),
-        innerField = c("#9B87A6") to c("#D5AAB8"),
-        fillet = c("#E9E4DF") to c("#F0DDE0"),
-        core = c("#E9E4DF"),
-        oculusInner = c("#D5AAB8"),
-        oculusOuter = c("#9B87A6"),
-        innerSpandrel = c("#37343C"),
-        outerSpandrel = c("#708596"),
-        foil = c("#E9E4DF") to c("#708596"),
-        lune = c("#37343C"),
-        petal = c("#D5AAB8"),
-        plain = c("#37343C"),
-        stone = c("#E6DCCB"),
-        lead = c("#37343C")
-    )
-
-    /** rose minéral #C9878C, rose coquillage #E8C9BE, terracotta sourde #A65D55, olive grisé #777C57, lin clair #E6D8BF, brun charbon #34302E (fonds et plombs). */
-    val ROSE_OLIVE = RosaceScheme(
-        name = "Rose, terracotta et olive",
-        outerField = c("#C9878C") to c("#E8C9BE"),
-        innerField = c("#A65D55") to c("#92524B"),
-        fillet = c("#E6D8BF") to c("#E8C9BE"),
-        core = c("#E6D8BF"),
-        oculusInner = c("#C9878C"),
-        oculusOuter = c("#A65D55"),
-        innerSpandrel = c("#34302E"),
-        outerSpandrel = c("#777C57"),
-        foil = c("#E6D8BF") to c("#777C57"),
-        lune = c("#34302E"),
-        petal = c("#C9878C"),
-        plain = c("#34302E"),
-        stone = c("#E6DCCB"),
-        lead = c("#34302E")
-    )
-
-    /** rose #D69AA7, rose pâle #EBD2D5, prune #70445C, sauge #758E87, ivoire #E8DFD0, laiton doux #C2A36B (trèfles et cœur) ; plombs noirs. */
-    val ROSE_LAITON = RosaceScheme(
-        name = "Rose, prune, sauge et laiton",
-        outerField = c("#D69AA7") to c("#EBD2D5"),
-        innerField = c("#70445C") to c("#633C51"),
-        fillet = c("#E8DFD0") to c("#EBD2D5"),
-        core = c("#C2A36B"),
-        oculusInner = c("#D69AA7"),
-        oculusOuter = c("#70445C"),
-        innerSpandrel = c("#70445C"),
-        outerSpandrel = c("#758E87"),
-        foil = c("#C2A36B") to c("#758E87"),
-        lune = c("#70445C"),
-        petal = c("#D69AA7"),
-        plain = c("#70445C"),
-        stone = c("#E6DCCB")
     )
 
     // VERT, CRAMOISI ET AMBRE (28 oct. 2026) — palette HORS SAISON LITURGIQUE,
@@ -708,15 +527,383 @@ object RosaceSchemes {
     }
 }
 
+// ================================================================ palettes par rôles
+
+/**
+ * Palette PAR RÔLES, commune aux nouveaux dessins de rosace (A médiéval
+ * sobre ; à venir : B curviligne, C « dalle », C « arcades »). Chaque
+ * dessin répartit lui-même ces rôles sur ses pièces : une même palette
+ * s'applique ainsi aux quatre dessins. (La rosace rayonnante d'origine
+ * garde ses RosaceScheme.)
+ *
+ * Retenues le 1er nov. 2026 ; leçon des essais : le rose fonctionne quand
+ * il PERCE une couleur profonde, avec un centre lumineux (pas de sauge, pas
+ * de grisé, pas de fuchsia).
+ */
+data class RosacePalette(
+    val name: String,
+    /** Couronne extérieure (deux teintes). */
+    val outer: Pair<ColorRGBa, ColorRGBa>,
+    /** Étoile, anneau intermédiaire (deux teintes). */
+    val middle: Pair<ColorRGBa, ColorRGBa>,
+    /** Centre (deux teintes ; la première est l'ivoire du cœur). */
+    val centre: Pair<ColorRGBa, ColorRGBa>,
+    /** Fonds sombres. */
+    val deep: ColorRGBa,
+    /** Grandes surfaces sombres, éclaircies d'un cran par rapport à deep. */
+    val deepBig: ColorRGBa,
+    /** Accent. */
+    val accent: ColorRGBa,
+    /** Or (trèfles ; points de la couronne du dessin B). */
+    val gold: ColorRGBa,
+    /** Croix des axes (dessins C seulement : pas de croix dans A et B). */
+    val cross: ColorRGBa,
+    /** Rose très pâle : anneau autour des centres ivoire (A, B). */
+    val veryPale: ColorRGBa = ColorRGBa.fromHex("#F3DFE4"),
+    /** Pierre du remplage (A, B). */
+    val stone: ColorRGBa = ColorRGBa.fromHex("#D8CDB8"),
+    /** Plombs (charbon plutôt que noir) : plombs de structure, contour extérieur. */
+    val lead: ColorRGBa = ColorRGBa.fromHex("#343436"),
+    /** Plombs fins (« contour décoratif ») des dessins B et C, qui ont une
+     *  hiérarchie de plombs ; null = même couleur que lead. Sans effet sur le
+     *  dessin A (une seule épaisseur de plomb) ni sur la rosace rayonnante. */
+    val leadFine: ColorRGBa? = null,
+    /** Couleurs imposées à certaines pièces, repérées par une étiquette.
+     *  Vide = couleurs des rôles seuls (toutes les palettes antérieures).
+     *  Étiquettes disponibles :
+     *  - dessin A : "spandrel2" (écoinçons du bord, alternés sinon accent / deepBig) ;
+     *  - couronne des dessins B : "ogeeA", "ogeeB" (pièces en accolade),
+     *    "middleA", "middleB" (pièces du milieu), "footA", "footB" (pieds) ;
+     *    A et B désignent une lancette sur deux. */
+    val overrides: Map<String, ColorRGBa> = emptyMap()
+) {
+    /** Couleur d'un rôle, tel que les dessins B et C le notent sur leurs
+     *  pièces (RosaceStyles.kt) : out0, out1, mid0, mid1, cen0, cen1, deep,
+     *  deepBig, acc, gold, cross, veryPale. Un rôle peut porter une étiquette
+     *  (« acc@ogeeB ») : la couleur de overrides[étiquette] l'emporte alors,
+     *  si la palette en définit une ; sinon, celle du rôle. */
+    fun colorOfRole(role: String): ColorRGBa {
+        val at = role.indexOf('@')
+        if (at < 0) return colorOfBaseRole(role)
+        return overrides[role.substring(at + 1)] ?: colorOfBaseRole(role.substring(0, at))
+    }
+
+    private fun colorOfBaseRole(role: String): ColorRGBa = when (role) {
+        "out0" -> outer.first
+        "out1" -> outer.second
+        "mid0" -> middle.first
+        "mid1" -> middle.second
+        "cen0" -> centre.first
+        "cen1" -> centre.second
+        "deep" -> deep
+        "deepBig" -> deepBig
+        "acc" -> accent
+        "gold" -> gold
+        "cross" -> cross
+        "veryPale" -> veryPale
+        else -> deep
+    }
+}
+
+object RosacePalettes {
+    private fun c(hex: String) = ColorRGBa.fromHex(hex)
+
+    /** Rose, grenat et or — VALIDÉE pour Gaudete et Laetare (2 nov. 2026),
+     *  palette de référence des rosaces A, B, C. */
+    val GRENAT_OR = RosacePalette(
+        name = "Rose, grenat et or",
+        outer = c("#6E2238") to c("#7E2C44"),
+        middle = c("#C9879C") to c("#DDA7B6"),
+        centre = c("#F5E6DA") to c("#E9C3CB"),
+        deep = c("#3E1222"),
+        deepBig = c("#561A2D"),
+        accent = c("#9A4A5E"),
+        gold = c("#C9A55A"),
+        cross = c("#F5E6DA"),
+        lead = c("#343436")
+    )
+
+    /** La joie dans l'attente — la plus juste liturgiquement : le violet de
+     *  l'Avent et du Carême, le rose au cœur. */
+    val JOIE_ATTENTE = RosacePalette(
+        name = "La joie dans l'attente",
+        outer = c("#493449") to c("#68465F"),
+        middle = c("#C87997") to c("#E3B0C0"),
+        centre = c("#F0E5D5") to c("#E3B0C0"),
+        deep = c("#493449"),
+        deepBig = c("#583D54"),
+        accent = c("#68465F"),
+        gold = c("#B49A62"),
+        cross = c("#F0E5D5"),
+        lead = c("#302B30")
+    )
+
+    /** Grenat et prune — palette de travail proposée par l'autre IA, retenue
+     *  le 1er nov. 2026 ; #48222F (fonds les plus sombres) est dérivé du grenat. */
+    val GRENAT_PRUNE = RosacePalette(
+        name = "Grenat et prune",
+        outer = c("#592B3D") to c("#60415F"),
+        middle = c("#C87997") to c("#E3B0C0"),
+        centre = c("#F0E5D5") to c("#E3B0C0"),
+        deep = c("#48222F"),
+        deepBig = c("#592B3D"),
+        accent = c("#60415F"),
+        gold = c("#B49A62"),
+        cross = c("#F0E5D5"),
+        lead = c("#302B30")
+    )
+
+    // PALETTES « ESTHÉTIQUES » (1er nov. 2026), ajustées à partir de bases
+    // proposées par Laetitia : centre lumineux, pas de teinte grisée,
+    // saturation modérée ; pierre et plombs choisis pour chaque palette.
+
+    /** Arctic Night — bleu nuit et glace, or pâle comme une étoile ; pierre
+     *  froide. Retenue (complément pour les ornements de Noël) ; c'est la
+     *  palette « bleu, ivoire et or » des briefs de l'autre IA. Base : nuit
+     *  #0D1B2A, dégradé #FFFFFF → #C9E4F5 → #87CEEB → #191970, adouci. */
+    val ARCTIC_NIGHT = RosacePalette(
+        name = "Arctic Night",
+        outer = c("#1B2B5E") to c("#24396F"),
+        middle = c("#7DB0D3") to c("#A8CDE5"),
+        centre = c("#F8FAFC") to c("#DCEBF5"),
+        deep = c("#0D1B2A"),
+        deepBig = c("#16294A"),
+        accent = c("#3F6699"),
+        gold = c("#D9BE7A"),
+        cross = c("#F8FAFC"),
+        veryPale = c("#E8F1F8"),
+        stone = c("#D9DAD6"),
+        lead = c("#262B33")
+    )
+
+    /** Emerald Depths — verts de vitrail et or ; candidate pour revisiter la
+     *  palette verte. Centre et croix en jade pâle, moins blancs que la
+     *  première version (#F2F6EE ; croix #F2F6EE), jugés trop blancs dans B et
+     *  les C. Base : forêt #0C3B2E, dégradé #D4E8DC → #8FC9A8 → #50997A → #2D5F4D. */
+    val EMERALD_DEPTHS = RosacePalette(
+        name = "Emerald Depths",
+        outer = c("#1D5641") to c("#25654D"),
+        middle = c("#5BA27F") to c("#8BC2A3"),
+        centre = c("#D9EADD") to c("#B5D6C0"),
+        deep = c("#0B3326"),
+        deepBig = c("#134434"),
+        accent = c("#3A8063"),
+        gold = c("#D4AE55"),
+        cross = c("#CDE5D4"),
+        veryPale = c("#CBE3D3"),
+        stone = c("#D8CFBD"),
+        lead = c("#28302C")
+    )
+
+    /** Ocean Reverie — sarcelle et vert d'eau, sans seconde couleur (la
+     *  version avec un accent cuivre a été écartée : plus belle sans). Teintes
+     *  de la base telles que données (#14363C ; #CFE6E4 → #7FA8A6 → #335C5A),
+     *  la quatrième obtenue par mélange. */
+    val OCEAN_REVERIE = RosacePalette(
+        name = "Ocean Reverie",
+        outer = c("#335C5A") to c("#3E6765"),
+        middle = c("#7FA8A6") to c("#9FC1BF"),
+        centre = c("#CFE6E4") to c("#A7C7C5"),
+        deep = c("#14363C"),
+        deepBig = c("#1F4346"),
+        accent = c("#598280"),
+        gold = c("#BBD6D4"),
+        cross = c("#CFE6E4"),
+        veryPale = c("#B7D3D1")
+    )
+
+    /** Sunset Reverie — bordeaux, corail et or, centre crème pêche ; pierre
+     *  grès chaud. Base (fond crème #FBE4C9, dégradé #F4C430 → #FFDAB9 →
+     *  #CD5C5C → #800020) réinterprétée : la crème au centre, le bordeaux dans
+     *  les fonds ; teintes adoucies. */
+    val SUNSET_REVERIE = RosacePalette(
+        name = "Sunset Reverie",
+        outer = c("#7A1E2E") to c("#8C2A38"),
+        middle = c("#D27866") to c("#E7A68E"),
+        centre = c("#FCEEDD") to c("#F6D5B8"),
+        deep = c("#4A1420"),
+        deepBig = c("#64192A"),
+        accent = c("#B04A45"),
+        gold = c("#E2B04A"),
+        cross = c("#FCEEDD"),
+        veryPale = c("#F9E3CF"),
+        stone = c("#E2D3BB"),
+        lead = c("#33292A")
+    )
+
+    /** Orchid Shadow — prune presque noire et orchidée, or ancien. À L'ESSAI :
+     *  à comparer avec la palette violette actuelle avant de décider. Base :
+     *  #1A0F1C, dégradé #C8A5C4 → #9B7498 → #6B4A6B → #3D2540, désgrisé. */
+    val ORCHID_SHADOW = RosacePalette(
+        name = "Orchid Shadow",
+        outer = c("#46264C") to c("#55305C"),
+        middle = c("#A86FA6") to c("#C899C4"),
+        centre = c("#F6EDF3") to c("#E6CDE1"),
+        deep = c("#1C1020"),
+        deepBig = c("#2D1A33"),
+        accent = c("#7A4680"),
+        gold = c("#C9A55A"),
+        cross = c("#F6EDF3"),
+        veryPale = c("#EFE0EB"),
+        stone = c("#D6CCC4"),
+        lead = c("#2A2229")
+    )
+
+    // PALETTES LITURGIQUES DES ROSACES A, B, C (2 nov. 2026), d'après les
+    // teintes indicatives proposées par l'autre IA, adaptées. Vert : validée.
+    // Blanc : à l'essai (v2a, v2b) — et C demandera une palette blanche propre,
+    // sa croix ne ressortant que sur un fond soutenu.
+
+    /** Vert, ivoire et or — VALIDÉE pour le Temps ordinaire (2 nov. 2026).
+     *  Version 2 : plus de profondeur et de
+     *  nuances, sans dominante sauge ni émeraude. Teintes indicatives #174C3B,
+     *  #287653, #559875, #A5C8AD, ivoire #F1EBDD, or ancien #B69550 ; le vert
+     *  clair #A5C8AD (proche de la sauge) n'est pas employé tel quel : il est
+     *  remplacé par #8DBB9C (rôle middle) et #CFE0CC (anneaux clairs) ; l'or
+     *  est éclairci (#BE9C52), un or trop sombre virant au bronze sous le verre.
+     *  Version 1 (#2F6B45, #3C7A4E, #6FA77E…), jugée trop uniforme. */
+    val VERT_IVOIRE_OR = RosacePalette(
+        name = "Vert, ivoire et or",
+        outer = c("#174C3B") to c("#1F5E46"),
+        middle = c("#559875") to c("#8DBB9C"),
+        centre = c("#F1EBDD") to c("#CFE0CC"),
+        deep = c("#123D30"),
+        deepBig = c("#1B5240"),
+        accent = c("#287653"),
+        gold = c("#BE9C52"),
+        cross = c("#F1EBDD"),
+        veryPale = c("#E6ECDD"),
+        lead = c("#2A2E2B")
+    )
+
+    /** Blanc, ivoire et or : palettes de Noël des rosaces, VALIDÉES le 3 nov.
+     *  2026 (essais v4 à v7, d'après les briefs de l'autre IA). Une palette par
+     *  dessin, sur une base commune :
+     *  - blanc lumineux #FFFDF8 (blanc dominant) ; nacre froide #E9EEF1 (celle
+     *    de la palette « blanc lumineux » de Noël, Palette.kt), qui empêche
+     *    l'ensemble de glisser vers le beige ; ivoire chaud #F2EBDD ;
+     *  - champagne clair #E8D6AE ; or lumineux #D0A64D ; or ancien #A98543,
+     *    réservé aux petits accents (trèfles de A, perles de B1) ;
+     *  - pierre claire #D0C7B5 ; plombs #4A453D, contours fins #655F53
+     *    (traitement « b » ; ni contours noirs épais, ni plomb #777064, qui
+     *    dissout la structure de A).
+     *  L'or va aux médaillons, perles, trèfles et détails ; pas de carreaux
+     *  dorés sur la bordure des B, pas d'anneau extérieur doré sur C.
+     *  Écartés : v3 (ivoires et pierres, rendu patiné et terne), panneaux
+     *  champagne sur C (trop jaune), semis en damier sur la couronne des B. */
+    private val noelBase = RosacePalette(
+        name = "Blanc, ivoire et or (Noël)",
+        outer = c("#F2EBDD") to c("#FFFDF8"),
+        middle = c("#FFFDF8") to c("#E9EEF1"),
+        centre = c("#FFFDF8") to c("#E8D6AE"),
+        deep = c("#D0A64D"),
+        deepBig = c("#E8D6AE"),
+        accent = c("#F2EBDD"),
+        gold = c("#D0A64D"),
+        cross = c("#FFFDF8"),
+        veryPale = c("#D0A64D"),
+        stone = c("#D0C7B5"),
+        lead = c("#4A453D"),
+        leadFine = c("#655F53")
+    )
+
+    /** Noël, dessin A (médiévale) : cœur de l'oculus cerclé d'or, trèfles en
+     *  or ancien, écoinçons du bord tous en champagne clair (anneau continu). */
+    val NOEL_A = noelBase.copy(
+        name = "Blanc, ivoire et or (Noël) — A",
+        centre = c("#FFFDF8") to c("#D0A64D"),
+        gold = c("#A98543"),
+        overrides = mapOf("spandrel2" to c("#E8D6AE"))
+    )
+
+    /** Couronne des B : toutes les pièces en accolade en champagne clair, plus
+     *  la pièce du milieu une lancette sur deux (dégradé du doré au blanc). */
+    private val noelRingB = mapOf("ogeeA" to c("#E8D6AE"), "ogeeB" to c("#E8D6AE"), "middleA" to c("#E8D6AE"))
+
+    /** Noël, dessin B1 (amandes) : médaillon doré, perles en or ancien. */
+    val NOEL_B1 = noelBase.copy(
+        name = "Blanc, ivoire et or (Noël) — B1",
+        outer = c("#F2EBDD") to c("#E8D6AE"),
+        centre = c("#FFFDF8") to c("#D0A64D"),
+        deepBig = c("#F2EBDD"),
+        gold = c("#A98543"),
+        overrides = noelRingB
+    )
+
+    /** Noël, dessin B2 (étoile) : or lumineux pour les perles, médaillon clair. */
+    val NOEL_B2 = noelBase.copy(
+        name = "Blanc, ivoire et or (Noël) — B2",
+        outer = c("#F2EBDD") to c("#E8D6AE"),
+        deepBig = c("#F2EBDD"),
+        overrides = noelRingB
+    )
+
+    /** Noël, dessin C (contemporaine) : croix blanche sur une gloire dorée
+     *  (disque central), champagne le long des bras, panneaux blancs. */
+    val NOEL_C = noelBase.copy(
+        name = "Blanc, ivoire et or (Noël) — C",
+        outer = c("#D0A64D") to c("#FFFDF8"),
+        middle = c("#E8D6AE") to c("#F2EBDD"),
+        centre = c("#FFFDF8") to c("#D0A64D")
+    )
+
+    val ALL = listOf(GRENAT_OR, JOIE_ATTENTE, GRENAT_PRUNE, ARCTIC_NIGHT, EMERALD_DEPTHS, OCEAN_REVERIE, SUNSET_REVERIE, ORCHID_SHADOW, VERT_IVOIRE_OR, NOEL_A, NOEL_B1, NOEL_B2, NOEL_C)
+
+    /** Pierre sombre : un anthracite, comme les pierres volcaniques (pierre de
+     *  Volvic) ou un remplage vu à contre-jour. S'emploie avec
+     *  palette.copy(stone = RosacePalettes.PIERRE_ANTHRACITE). Pour une
+     *  lecture « plombs seuls », prendre plutôt palette.copy(stone = palette.lead). */
+    val PIERRE_ANTHRACITE: ColorRGBa = c("#4A4743")
+}
+
 /**
  * Couleurs de la rosace : chaque pièce prend la couleur de son type et de
  * sa position (voir RosaceGeometry.colorOf). Remplace les couleurs tirées
  * par le PaletteSystem ; ne consomme AUCUN tirage aléatoire.
+ * - rosace rayonnante (RosaceCompositionSystem) : scheme (RosaceScheme) ;
+ * - rosace médiévale sobre (MedievalRosaceCompositionSystem) et dessins B
+ *   et C (RosaceStyles.kt) : palette (RosacePalette).
  */
-fun applyRosaceColors(guide: RosaceGuide, cellColors: MutableList<ColorRGBa>, scheme: RosaceScheme) {
+fun applyRosaceColors(guide: RosaceGuide, cellColors: MutableList<ColorRGBa>, scheme: RosaceScheme, palette: RosacePalette) {
+    val geometry = guide.geometry
     for (i in cellColors.indices) {
         val p = guide.unitPieces[i]
-        cellColors[i] = guide.geometry.colorOf(p.kind, p.role, p.angle, scheme)
+        cellColors[i] = when {
+            geometry == null -> palette.colorOfRole(p.role)
+            geometry.sober -> geometry.medievalColorOf(p, palette)
+            else -> geometry.colorOf(p.kind, p.role, p.angle, scheme)
+        }
+    }
+}
+
+/** Couleur de la pierre : celle du RosaceScheme (rosace rayonnante) ou de la
+ *  RosacePalette (tous les autres dessins). */
+fun rosaceStoneColor(guide: RosaceGuide, scheme: RosaceScheme, palette: RosacePalette): ColorRGBa {
+    val geometry = guide.geometry
+    return if (geometry == null || geometry.sober) palette.stone else scheme.stone
+}
+
+/** Plombs épais de la hiérarchie (dessins B et C), par-dessus les plombs fins.
+ *  leadWidth : LeadStyle.width, déjà mis à l'échelle de l'export. */
+fun drawRosaceLeadLines(drawer: Drawer, guide: RosaceGuide, offset: Vector2, leadColor: ColorRGBa, leadWidth: Double) {
+    if (guide.leadLines.isEmpty()) return
+    drawer.isolated {
+        drawer.shadeStyle = null
+        drawer.fill = null
+        drawer.stroke = leadColor
+        drawer.lineCap = LineCap.ROUND
+        for (ln in guide.leadLines) {
+            if (ln.points.size < 2) continue
+            val pts = ln.points.map { Vector2(it.x + offset.x, it.y + offset.y) }
+            val n = if (ln.closed) pts.size else pts.size - 1
+            val segments = (0 until n).map { k ->
+                val a = pts[k]
+                val b = pts[(k + 1) % pts.size]
+                Segment2D(a, Vector2(a.x + (b.x - a.x) / 3.0, a.y + (b.y - a.y) / 3.0), Vector2(a.x + 2.0 * (b.x - a.x) / 3.0, a.y + 2.0 * (b.y - a.y) / 3.0), b)
+            }
+            drawer.strokeWeight = leadWidth * ln.factor
+            drawer.contour(ShapeContour.fromSegments(segments, closed = ln.closed))
+        }
     }
 }
 
@@ -749,11 +936,12 @@ private fun circleContour(c: Vector2, r: Double): ShapeContour {
 }
 
 /** Pierre : disque plein sous le verre (les vitraux le recouvrent ensuite). */
-fun drawRosaceStone(drawer: Drawer, guide: RosaceGuide, offset: Vector2, scheme: RosaceScheme) {
+fun drawRosaceStone(drawer: Drawer, guide: RosaceGuide, offset: Vector2, stone: ColorRGBa) {
+    if (!guide.hasStone) return
     drawer.isolated {
         drawer.shadeStyle = null
         drawer.stroke = null
-        drawer.fill = scheme.stone
+        drawer.fill = stone
         drawer.contour(circleContour(Vector2(guide.center.x + offset.x, guide.center.y + offset.y), guide.radius))
     }
 }
@@ -949,17 +1137,62 @@ private fun lancetPieces(op: Polygon, ang: Double, s: Double, fillet: Double): L
 }
 
 /**
- * Géométrie d'une rosace à `rotations` secteurs, en unités (rayon 1).
- * Calculée une seule fois par nombre de rotations (voir of()).
+ * Lancette coupée en grands PANNEAUX par des traverses perpendiculaires à
+ * son axe, tous les s (rosace médiévale sobre) ; rôles field0 / field1
+ * alternés d'un panneau à l'autre. Dans le repère de l'axe : symétrique
+ * par construction.
  */
-class RosaceGeometry private constructor(val rotations: Int) {
+private fun barPieces(op: Polygon, ang: Double, s: Double): List<Pair<Polygon, String>> {
+    val l = rotate(op, -ang) as Polygon
+    val env = l.envelopeInternal
+    val minx = env.minX
+    val maxx = env.maxX
+    val bars = mutableListOf<LineString>()
+    var k = 1
+    while (k < 80 && minx + k * s < maxx) {
+        val x = minx + k * s
+        bars.add(line(listOf(Coordinate(x, -3.0), Coordinate(x, 3.0))))
+        k++
+    }
+    val out = mutableListOf<Pair<Polygon, String>>()
+    for (q in splitBy(l, bars)) {
+        val t = floor((q.interiorPoint.x - minx) / s).toLong().mod(2)
+        out.add((rotate(q, ang) as Polygon) to "field$t")
+    }
+    return out
+}
+
+/**
+ * Géométrie d'une rosace à `rotations` secteurs, en unités (rayon 1).
+ * Calculée une seule fois par réglage (voir of()).
+ *
+ * sober = true : rosace MÉDIÉVALE SOBRE (MedievalRosaceCompositionSystem) :
+ * - couronne : plus de quadrilobes au bord, meneaux prolongés jusqu'au
+ *   cercle extérieur ;
+ * - lancettes coupées en panneaux par des traverses (ni losanges ni
+ *   filets) ; pétales, fonds et lancettes de l'oculus en une seule pièce ;
+ * - oculus central agrandi (× 1,45, au plus 0,36), découpé en un cœur rond
+ *   et une pièce par lobe.
+ * sober = false : la rosace rayonnante d'origine, inchangée.
+ */
+class RosaceGeometry private constructor(
+    val rotations: Int,
+    val sober: Boolean,
+    /** Rosace sobre : diamètre du médaillon central (1,0 = prototype). */
+    val medallionScale: Double,
+    /** Rosace sobre : hauteur des panneaux des lancettes de l'étoile. */
+    val starPanelHeight: Double
+) {
 
     companion object {
-        private val cache = mutableMapOf<Int, RosaceGeometry>()
+        private data class Key(val rotations: Int, val sober: Boolean, val medallionScale: Double, val starPanelHeight: Double)
+        private val cache = mutableMapOf<Key, RosaceGeometry>()
 
-        /** Géométrie (mise en cache) pour ce nombre de rotations. */
-        fun of(rotations: Int): RosaceGeometry = synchronized(cache) {
-            cache.getOrPut(rotations) { RosaceGeometry(rotations) }
+        /** Géométrie (mise en cache) pour ce nombre de rotations et ce style.
+         *  medallionScale et starPanelHeight ne servent qu'à la rosace sobre. */
+        fun of(rotations: Int, sober: Boolean = false, medallionScale: Double = 1.0, starPanelHeight: Double = 0.09): RosaceGeometry = synchronized(cache) {
+            val key = if (sober) Key(rotations, true, medallionScale, starPanelHeight) else Key(rotations, false, 1.0, 0.09)
+            cache.getOrPut(key) { RosaceGeometry(key.rotations, key.sober, key.medallionScale, key.starPanelHeight) }
         }
 
         /** Ouverture minimale d'une sous-lancette (rayon de la rosace = 1). */
@@ -1015,7 +1248,8 @@ class RosaceGeometry private constructor(val rotations: Int) {
         val ws = clamp(sqrt(sin(H) / sin(PI / 12)), 0.75, 1.25)
         W1 = 0.021 * ws; W2 = 0.013 * ws; W3 = 0.008 * ws
         // anneau 1 : une lancette par secteur
-        R_OC = clamp(0.040 / sin(H), 0.15, 0.36)
+        val rOc = clamp(0.040 / sin(H), 0.15, 0.36)
+        R_OC = if (sober) min(rOc * 1.45, 0.36) else rOc   // sobre : centre agrandi
         spr1 = R_MID / (cos(H) + 2 * sin(H) * archHeight(0.95))      // pointe de l'arc sur l'anneau médian
         // anneau 2 : lancettes d'environ 15°
         m2 = max(1L, pyRound(2 * H / (15.0 * PI / 180.0))).toInt()
@@ -1030,7 +1264,7 @@ class RosaceGeometry private constructor(val rotations: Int) {
         ocCrown = R_OC >= 0.19
         if (ocCrown) {
             ocS = R_OC / (cos(H) + 2 * sin(H) * archHeight(1.0))
-            R_CORE = min(0.45 * R_OC, ocS - 0.03)
+            R_CORE = min(0.45 * R_OC * (if (sober) medallionScale else 1.0), ocS - 0.03)
         } else {
             ocS = 0.0
             R_CORE = R_OC
@@ -1094,10 +1328,12 @@ class RosaceGeometry private constructor(val rotations: Int) {
         // anneau 2
         for ((i, ci) in lancet2Axes.withIndex()) {
             val right = ci + h2
-            l.add(line(listOf(polar(R_MID, right), polar(spr3, right))) to (if (i == m2 - 1) W1 else W2))
+            // sobre : meneau prolongé jusqu'au cercle extérieur
+            l.add(line(listOf(polar(R_MID, right), polar(if (sober) R_OUT else spr3, right))) to (if (i == m2 - 1) W1 else W2))
             val (hd, _) = arch(polar(spr3, ci - h2), polar(spr3, right), 0.9)
             l.add(line(hd) to W2)
             l.add(foilOutline(tref2(ci), 0.177 * chord2, 3, ci) to W3)
+            if (sober) continue   // sobre : pas de quadrilobe au bord
             val c = polar(rosR, right)
             l.add(circ(c, rosRadius) to W2)
             l.add(foilOutline(c, rosRadius * 0.85, 4, right + PI / 4) to W3)
@@ -1136,9 +1372,9 @@ class RosaceGeometry private constructor(val rotations: Int) {
         for (ci in lancet2Axes) {
             out.add(Label(polar((R_MID + spr3) / 2, ci), "lancet2", ci))
             out.add(Label(tref2(ci), "h2_core", ci))
-            out.add(Label(polar(rosR, ci + h2), "ros_core", ci + h2))
+            if (!sober) out.add(Label(polar(rosR, ci + h2), "ros_core", ci + h2))
         }
-        out.add(Label(polar(rosR, -H), "ros_core", -H))
+        if (!sober) out.add(Label(polar(rosR, -H), "ros_core", -H))
         if (ocCrown) {
             out.add(Label(polar((R_CORE + ocS) / 2, 0.0), "oc_lancet", 0.0))
             out.add(Label(polar(R_OC - 0.01, H), "oc_spandrel", H))
@@ -1155,7 +1391,7 @@ class RosaceGeometry private constructor(val rotations: Int) {
         val r = hypot(rp.x, rp.y)
         val a = atan2(rp.y, rp.x)
         for (h in heads) if (dist(rp, h.center) < h.rho) return "head_lune" to h.axis
-        for (ax in lancet2Axes.map { it + h2 } + listOf(-H)) {
+        if (!sober) for (ax in lancet2Axes.map { it + h2 } + listOf(-H)) {
             if (dist(rp, polar(rosR, ax)) < rosRadius) return "ros_lune" to ax
         }
         if (r < R_MID) {
@@ -1169,7 +1405,35 @@ class RosaceGeometry private constructor(val rotations: Int) {
 
     // ------------------------------------------------------------ construction
 
+    /**
+     * Oculus de la rosace sobre : un cœur rond (rôle core), puis une pièce
+     * par lobe (rôle oc_in) — et non des rayons fins, qui faisaient une
+     * « marguerite ». Ouverture centrale sans le centre : une pièce par lobe
+     * (rôle oc_out).
+     */
+    private fun soberOculusPieces(op: Polygon): List<Pair<Polygon, String>> {
+        val out = mutableListOf<Pair<Polygon, String>>()
+        val o = pointAt(Coordinate(0.0, 0.0))
+        val rest: Geometry
+        val role: String
+        if (op.contains(o)) {
+            val core = o.buffer(0.30 * R_CORE, 48)
+            for (p in polygonsOf(inter(core, op))) out.add(p to "core")
+            rest = diff(op, core)
+            role = "oc_in"
+        } else {
+            rest = op
+            role = "oc_out"
+        }
+        for (k in 0 until ocLobes) {
+            val a = 2 * PI * k / ocLobes
+            for (g in polygonsOf(inter(rest, wedge(a - PI / ocLobes, a + PI / ocLobes)))) if (g.area > 1e-7) out.add(g to role)
+        }
+        return out
+    }
+
     private fun oculusPieces(op: Polygon): List<Pair<Polygon, String>> {
+        if (sober) return soberOculusPieces(op)
         val out = mutableListOf<Pair<Polygon, String>>()
         val o = pointAt(Coordinate(0.0, 0.0))
         val core = o.buffer(0.267 * R_CORE, 48)
@@ -1232,11 +1496,16 @@ class RosaceGeometry private constructor(val rotations: Int) {
         val seen = HashSet<Triple<Long, Long, String>>()
         for (rep in reps.values) {
             val spacing = LANCET_SPACING[rep.kind]
-            val base: List<Pair<Polygon, String>> = if (spacing != null) {
-                val fillet = if (rep.kind == "sub_lancet" || rep.kind == "lancet2") 0.012 else 0.0
-                lancetPieces(rep.g, rep.axis, spacing, fillet)
-            } else {
-                listOf(rep.g to "plain")
+            val base: List<Pair<Polygon, String>> = when {
+                // sobre : lancettes en panneaux (traverses), le reste d'une pièce
+                sober && rep.kind == "lancet2" -> barPieces(rep.g, rep.axis, 0.11)
+                sober && rep.kind == "sub_lancet" -> barPieces(rep.g, rep.axis, starPanelHeight)
+                sober && spacing != null -> listOf(rep.g to "field0")
+                spacing != null -> {
+                    val fillet = if (rep.kind == "sub_lancet" || rep.kind == "lancet2") 0.012 else 0.0
+                    lancetPieces(rep.g, rep.axis, spacing, fillet)
+                }
+                else -> listOf(rep.g to "plain")
             }
             for ((q0, role) in base) for (q in withoutHoles(q0)) {
                 for ((g, ga) in images(q, rep.axis)) {
@@ -1301,6 +1570,55 @@ class RosaceGeometry private constructor(val rotations: Int) {
         if (kind == "spandrel1") return s.innerSpandrel
         if (kind == "spandrel2") return s.outerSpandrel
         return s.plain
+    }
+
+    /**
+     * Couleur d'une pièce de la rosace médiévale sobre (dessin A), d'après
+     * une palette par rôles. Réglages validés sur le prototype (design_A2,
+     * couronne enrichie, 1er nov. 2026) :
+     * - centre : cœur de l'oculus IVOIRE (centre.first), lobes autour en
+     *   rose très pâle (veryPale), pour éviter l'effet « marguerite » ;
+     * - étoile (sous-lancettes) : middle, alterné d'un panneau et d'un
+     *   secteur à l'autre ; pétales : accent ; fonds entre les grandes
+     *   lancettes : deepBig (éclairci d'un cran) ;
+     * - couronne enrichie : chaque lancette en trois bandes, middle.first au
+     *   pied, puis outer.second ou accent (selon la parité du secteur), et
+     *   outer.first en tête ; petits écoinçons du bord accent / deepBig ;
+     * - trèfles : tous de la couleur gold de la palette ; lunules : deep ;
+     * - pas de croix blanche dans les axes (jugée artificielle).
+     */
+    fun medievalColorOf(p: RosacePiece, pal: RosacePalette): ColorRGBa {
+        val kind = p.kind
+        val role = p.role
+        val par = parity(p.angle)
+        if (kind == "lancet2") {
+            val c = p.polygon.centroid.coordinate
+            val rr = hypot(c.x, c.y)
+            return when {
+                rr < 0.70 -> pal.middle.first
+                rr < 0.80 -> if (par == 0) pal.outer.second else pal.accent
+                else -> pal.outer.first
+            }
+        }
+        if (kind == "spandrel2") return pal.overrides["spandrel2"] ?: (if (par == 0) pal.accent else pal.deepBig)
+        if (role.startsWith("field")) {
+            val t = role.last().digitToInt()
+            return when (kind) {
+                "arch_spandrel" -> if (t == 0) pal.accent else shade(pal.accent, 0.88)
+                "spandrel1" -> if (t == 0) pal.deepBig else shade(pal.deepBig, 1.15)
+                else -> if ((t + par) % 2 == 0) pal.middle.first else pal.middle.second
+            }
+        }
+        if (role == "core") return pal.centre.first
+        if (role == "oc_in") return pal.veryPale
+        if (role == "oc_out") return pal.centre.second
+        if (kind == "oc_spandrel") return pal.veryPale
+        // trèfles : tous de la couleur gold de la palette (l'alternance or et
+        // ivoire du prototype a été écartée le 2 nov. 2026, moins harmonieuse)
+        if (kind.startsWith("head_core") || kind == "h2_core") return pal.gold
+        if (kind == "arch_spandrel") return pal.accent
+        if (kind == "spandrel1") return pal.deepBig
+        return pal.deep   // lunules et autres pièces
     }
 
     /** Les pièces de verre (rayon 1, axe du secteur 0 sur l'angle 0).

@@ -754,6 +754,64 @@ fun main() = application {
             printFormat = PrintFormat(300.0, 300.0, 300.0)
         )
 
+        // ------------------------
+        // ROSACES A, B, C (Rosace.kt, RosaceStyles.kt)
+        // ------------------------
+        // Dessins validés le 2 nov. 2026 ; une palette PAR RÔLES commune
+        // (RosacePalettes). Aucun tirage aléatoire. Réglés pour 12 rotations
+        // (rosaceRotations, plus haut) ; l'entrelacs de B3 demande un nombre pair.
+        // <-- swap ici : dessin de la rosace :
+        //   MedievalRosaceCompositionSystem(rotations = rosaceRotations)       — A, médiévale (pierre)
+        //   OrientalRosaceCompositionSystem(StyledRosace.Style.ORIENTAL_ALMONDS, rosaceRotations)
+        //                                                                      — B1, amandes, croix de mandorles (pierre)
+        //   OrientalRosaceCompositionSystem(StyledRosace.Style.ORIENTAL_STAR, rosaceRotations)
+        //                                                                      — B2, étoile, médaillon étoilé (pierre)
+        //   OrientalRosaceCompositionSystem(StyledRosace.Style.ORIENTAL_STAR_FOIL, rosaceRotations)
+        //                                                                      — B2, étoile, médaillon quadrilobe (pierre)
+        //   OrientalRosaceCompositionSystem(StyledRosace.Style.ORIENTAL_INTERLACE, rosaceRotations)
+        //                                                                      — B3, entrelacs (pierre autour, entrelacs en verre)
+        //   ContemporaryRosaceCompositionSystem()                              — C, contemporaine, croix pattée (tout en verre)
+        //   CurvilinearRosaceCompositionSystem(rotations = rosaceRotations)    — B d'origine, soufflets (pierre)
+        val rosaceDesign: CompositionSystem = MedievalRosaceCompositionSystem(rotations = rosaceRotations)
+        // <-- swap ici : palette (RosacePalettes, Rosace.kt) :
+        //   RosacePalettes.GRENAT_OR        — rose, grenat et or (Gaudete, Laetare) [validée]
+        //   RosacePalettes.VERT_IVOIRE_OR   — vert, ivoire et or (Temps ordinaire) [validée]
+        //   RosacePalettes.NOEL_A, NOEL_B1, NOEL_B2, NOEL_C
+        //                                   — blanc, ivoire et or (Noël) [validées] : une par dessin,
+        //                                     à associer au dessin du même nom (B2 : médaillon étoilé)
+        //   RosacePalettes.JOIE_ATTENTE     — la joie dans l'attente (violet, rose au cœur)
+        //   RosacePalettes.GRENAT_PRUNE     — grenat et prune
+        //   RosacePalettes.ARCTIC_NIGHT     — bleu nuit et glace, or pâle (Noël, hiver)
+        //   RosacePalettes.EMERALD_DEPTHS   — émeraude et or
+        //   RosacePalettes.OCEAN_REVERIE    — sarcelle et vert d'eau
+        //   RosacePalettes.SUNSET_REVERIE   — bordeaux, corail et or
+        //   RosacePalettes.ORCHID_SHADOW    — prune et orchidée (à l'essai)
+        val rosacePaletteChoice = RosacePalettes.GRENAT_OR
+        // <-- swap ici : pierre du remplage (A et B ; C n'en a pas) :
+        //   null                               — celle de la palette (claire)
+        //   RosacePalettes.PIERRE_ANTHRACITE   — pierre sombre (#4A4743)
+        //   rosacePaletteChoice.lead           — couleur des plombs : lecture « plombs seuls »
+        val stoneOverride: ColorRGBa? = null
+        // <-- swap ici : true = verre adouci (texture 0,10 ; stries 0,08 ;
+        // opalescence 0,10), false = verre actuel (opalescence 0,05).
+        val softGlass = false
+        val rosaceDesignRecipe = config.copy(
+            compositionSystem = rosaceDesign,
+            segmentationSystem = RosaceSegmentationSystem(),
+            curvatureAmount = 0.0,
+            // Plombs de la palette. Largeur de référence 1,2 : le dessin A
+            // l'emploie partout ; B et C en tirent leur hiérarchie (fins 0,6 ×,
+            // secondaires 1 ×, structure 1,6 à 2,2 ×).
+            leadStyle = config.leadStyle.copy(width = 1.2, color = rosacePaletteChoice.lead),
+            glassStyle = if (softGlass) config.glassStyle.copy(textureStrength = 0.10, streakStrength = 0.08, opalescenceStrength = 0.10)
+            else config.glassStyle.copy(opalescenceStrength = 0.05),
+            rosacePalette = if (stoneOverride != null) rosacePaletteChoice.copy(stone = stoneOverride) else rosacePaletteChoice,
+            bay = null,
+            printFormat = PrintFormat(300.0, 300.0, 300.0)
+        )
+
+
+
         // <-- swap ici : recette affichée et exportée.
         //   crossBayRecipe       — croix rayonnante dans une baie en arc brisé (2:3) [réglage actuel]
         //   trefoilBayRecipe     — croix tréflée dans une baie en arc brisé (2:3)
@@ -776,8 +834,10 @@ fun main() = application {
         //   botanicalRecipe      — motif raccordable floral
         //   periodicShardsRecipe — motif raccordable en éclats
         //   rayFieldRecipe       — fond « champ de rayons » (carte de vœux…), format libre
+        //   rosaceRecipe         — rosace rayonnante gothique (RosaceSchemes)
+        //   rosaceDesignRecipe   — rosaces A, B1, B2, B3, C (RosacePalettes)
         //   config               — ange (ou croix) défini ci-dessus
-        val activeConfig = rosaceRecipe
+        val activeConfig = rosaceDesignRecipe
 
         // Aperçu répété 2 × 2 (touche « r ») : pour vérifier le raccord
         // du motif. Chaque quart affiche la tuile entière, réduite.
