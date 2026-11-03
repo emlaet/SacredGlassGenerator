@@ -668,7 +668,14 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
             }
             add(f, role)
         }
-        addClassLeads(lines, mapOf("struct" to 2.2, "second" to 1.0))
+        // Les côtés des bras partent de l'intérieur du cercle r0 pour le
+        // découpage ; leur plomb, lui, s'arrête au cercle (sans quoi il entre
+        // dans le médaillon central en quatre paires de chicots).
+        val centreDisc = sPoint(o).buffer(r0, 720)
+        val leadLines = lines.flatMap { (ln, cl) ->
+            if (cl == "struct") sLineStrings(sDiff(ln, centreDisc)).map { it to cl } else listOf(ln to cl)
+        }
+        addClassLeads(leadLines, mapOf("struct" to 2.2, "second" to 1.0))
     }
 
     // ------------------------------------------------------------ E — Art nouveau
@@ -897,12 +904,15 @@ private class StarMotif(n: Int, rC: Double, rM: Double, w2: Double, w3: Double, 
         val l = hypot(dx, dy)
         val nx = -dy / l * d
         val ny = dx / l * d
-        val ext = 0.2   // prolongée au-delà du cercle médian : la pierre la coupe
+        val ext = 0.2   // prolongée, puis coupée au cercle médian (anneau ring)
         val ux = dx / l * ext
         val uy = dy / l * ext
         return sLine(listOf(Coordinate(a.x + nx - ux, a.y + ny - uy), Coordinate(b.x + nx + ux, b.y + ny + uy)))
     }
-    private val ring = sPoint(Coordinate(0.0, 0.0)).buffer(rM + 0.01, 720).let { sDiff(it, sPoint(Coordinate(0.0, 0.0)).buffer(rS, 480)) }
+    // Rubans coupés AU cercle médian, dont la pierre les recouvre : coupés
+    // au-delà (rM + 0,01, avant le 3 nov. 2026), ils débordaient de la pierre
+    // et entaillaient le pied des lancettes de la couronne.
+    private val ring = sPoint(Coordinate(0.0, 0.0)).buffer(rM, 720).let { sDiff(it, sPoint(Coordinate(0.0, 0.0)).buffer(rS, 480)) }
     override val lines = chords.flatMap { (a, b) ->
         listOf(-band, band).flatMap { d -> sLineStrings(sInter(offsetLine(a, b, d), ring)).map { it to w3 * 1.3 } }
     } + listOf(sCirc(Coordinate(0.0, 0.0), rS, 480) to w2)

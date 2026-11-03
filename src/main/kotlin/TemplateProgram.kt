@@ -772,7 +772,7 @@ fun main() = application {
         //                                                                      — B3, entrelacs (pierre autour, entrelacs en verre)
         //   ContemporaryRosaceCompositionSystem()                              — C, contemporaine, croix pattée (tout en verre)
         //   CurvilinearRosaceCompositionSystem(rotations = rosaceRotations)    — B d'origine, soufflets (pierre)
-        val rosaceDesign: CompositionSystem = MedievalRosaceCompositionSystem(rotations = rosaceRotations)
+        val rosaceDesign: CompositionSystem = ContemporaryRosaceCompositionSystem()
         // <-- swap ici : palette (RosacePalettes, Rosace.kt) :
         //   RosacePalettes.GRENAT_OR        — rose, grenat et or (Gaudete, Laetare) [validée]
         //   RosacePalettes.VERT_IVOIRE_OR   — vert, ivoire et or (Temps ordinaire) [validée]
@@ -786,7 +786,7 @@ fun main() = application {
         //   RosacePalettes.OCEAN_REVERIE    — sarcelle et vert d'eau
         //   RosacePalettes.SUNSET_REVERIE   — bordeaux, corail et or
         //   RosacePalettes.ORCHID_SHADOW    — prune et orchidée (à l'essai)
-        val rosacePaletteChoice = RosacePalettes.GRENAT_OR
+        val rosacePaletteChoice = RosacePalettes.NOEL_C
         // <-- swap ici : pierre du remplage (A et B ; C n'en a pas) :
         //   null                               — celle de la palette (claire)
         //   RosacePalettes.PIERRE_ANTHRACITE   — pierre sombre (#4A4743)

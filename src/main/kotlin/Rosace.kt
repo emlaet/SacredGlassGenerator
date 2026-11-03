@@ -817,8 +817,10 @@ object RosacePalettes {
     )
 
     /** Couronne des B : toutes les pièces en accolade en champagne clair, plus
-     *  la pièce du milieu une lancette sur deux (dégradé du doré au blanc). */
-    private val noelRingB = mapOf("ogeeA" to c("#E8D6AE"), "ogeeB" to c("#E8D6AE"), "middleA" to c("#E8D6AE"))
+     *  la pièce du milieu une lancette sur deux (dégradé du doré au blanc).
+     *  Pieds en blanc lumineux : en nacre froide, le pied d'une lancette sur
+     *  deux paraissait bleuté (retour de Laetitia, 3 nov. 2026). */
+    private val noelRingB = mapOf("ogeeA" to c("#E8D6AE"), "ogeeB" to c("#E8D6AE"), "middleA" to c("#E8D6AE"), "footB" to c("#FFFDF8"))
 
     /** Noël, dessin B1 (amandes) : médaillon doré, perles en or ancien. */
     val NOEL_B1 = noelBase.copy(
