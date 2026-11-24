@@ -33,7 +33,7 @@ data class PrintFormat(
     /** Hauteur du produit, en millimètres (fond perdu compris s'il y en a un). */
     val heightMm: Double,
     /** Résolution de l'export, en dpi (ppp) : 300 au minimum pour Gelato. */
-    val dpi: Double = 300.0
+    val dpi: Double = 700.0
 ) {
     /** Taille de l'export, en pixels. */
     val widthPx: Int get() = (widthMm / 25.4 * dpi).roundToInt()

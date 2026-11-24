@@ -96,6 +96,40 @@ data class ContemporaryRosaceCompositionSystem(
         StyledRosace.of(StyledRosace.Style.CONTEMPORARY, 12).place(width, height, sizeRatio, orientationDegrees)
 }
 
+/** Rosace C2 « Croix fleurie » (briefs du 17 nov. 2026) : croix évasée et
+ *  quatre pétales en amande sur les diagonales. calyx = true : version A,
+ *  « calice » (la couronne dorée remonte dans la base des pétales) ; false :
+ *  version B, « or discret » (l'or reste à la base des flammes intérieures).
+ *  Quatre axes : le nombre de rotations n'intervient pas. */
+data class CrossFlowerRosaceCompositionSystem(
+    val calyx: Boolean = false,
+    val sizeRatio: Double = 0.96,
+    val orientationDegrees: Double = -90.0,
+    /** Silhouette de la croix (phase 14) : CrossFlowerShape.C2 = la croix de
+     *  référence, inchangée ; CrossFlowerShape.ON1 = croix moins évasée
+     *  (Onyx et nacre, ON-K4). Les pièces du fond voisines s'ajustent. */
+    val crossShape: CrossFlowerShape = CrossFlowerShape.C2
+) : CompositionSystem {
+    override fun generate(width: Double, height: Double, targetRegions: Int, random: Random): CompositionGuide =
+        StyledRosace.of(if (calyx) StyledRosace.Style.CROSS_FLOWER_CALYX else StyledRosace.Style.CROSS_FLOWER, 12, crossShape)
+            .place(width, height, sizeRatio, orientationDegrees)
+}
+
+/**
+ * Silhouette de la croix de C2 « Croix fleurie » : demi-largeur du bras au
+ * bord de l'hostie (hw0) et à l'extrémité (hw1), en unités du rayon, et
+ * courbe de l'évasement entre les deux (exposant : 1,6 = évasement surtout
+ * vers l'extrémité ; 1,0 = évasement régulier).
+ */
+data class CrossFlowerShape(val hw0: Double, val hw1: Double, val flareExponent: Double) {
+    companion object {
+        /** Croix de référence de C2 (dessin validé le 17 nov. 2026). */
+        val C2 = CrossFlowerShape(0.045, 0.135, 1.6)
+        /** ON1, croix moins évasée (phase 12, Onyx et nacre : ON-K4). */
+        val ON1 = CrossFlowerShape(0.045, 0.105, 1.6)
+    }
+}
+
 /** Rosace E, Art nouveau (brief du 2 nov. 2026). */
 data class ArtNouveauRosaceCompositionSystem(
     val rotations: Int = 12,
@@ -284,7 +318,9 @@ private fun sWithoutHoles(p: Polygon, centredRays: List<Double>): List<Polygon> 
  * chaque pièce, plombs épais. Calculée une fois par style et par nombre de
  * rotations (voir of()).
  */
-class StyledRosace private constructor(val style: Style, val rotations: Int) {
+class StyledRosace private constructor(val style: Style, val rotations: Int,
+                                       /** Silhouette de la croix (dessins C2 seulement ; ignorée ailleurs). */
+                                       val crossShape: CrossFlowerShape = CrossFlowerShape.C2) {
 
     enum class Style {
         /** B, curviligne : soufflets (dessin d'origine). */
@@ -305,6 +341,10 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
         CONTEMPORARY,
         /** C « arcades » (piste D du brief). */
         ARCADE,
+        /** C2 « Croix fleurie », version B : or discret (base des flammes). */
+        CROSS_FLOWER,
+        /** C2 « Croix fleurie », version A : calice doré. */
+        CROSS_FLOWER_CALYX,
         /** E, Art nouveau : coups de fouet, anneau ondulé. */
         ART_NOUVEAU
     }
@@ -315,10 +355,10 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
     class Lead(val coords: List<Coordinate>, val closed: Boolean, val factor: Double)
 
     companion object {
-        private val cache = mutableMapOf<Pair<Style, Int>, StyledRosace>()
+        private val cache = mutableMapOf<Triple<Style, Int, CrossFlowerShape>, StyledRosace>()
 
-        fun of(style: Style, rotations: Int): StyledRosace = synchronized(cache) {
-            cache.getOrPut(style to rotations) { StyledRosace(style, rotations) }
+        fun of(style: Style, rotations: Int, crossShape: CrossFlowerShape = CrossFlowerShape.C2): StyledRosace = synchronized(cache) {
+            cache.getOrPut(Triple(style, rotations, crossShape)) { StyledRosace(style, rotations, crossShape) }
         }
 
         /** Plombs fins entre les pièces, en multiple de la largeur de la recette. */
@@ -338,6 +378,8 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
             Style.SLAB -> buildSlab()
             Style.CONTEMPORARY -> buildContemporary()
             Style.ARCADE -> buildArcade()
+            Style.CROSS_FLOWER -> buildCrossFlower(calyx = false, shape = crossShape)
+            Style.CROSS_FLOWER_CALYX -> buildCrossFlower(calyx = true, shape = crossShape)
             Style.ART_NOUVEAU -> buildArtNouveau()
         }
         if (style !in stoneStyles) scaleToUnit(1.0 / 0.965)
@@ -438,7 +480,7 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
                 val qa = atan2(qp.y, qp.x)
                 val role = when {
                     qr < rC -> motif.medallionRole(q, qp)
-                    qr < rM -> motif.role(qp)
+                    qr < rM -> motif.role(qp).let { ro -> if (ro == "mid0@branch") branchTag(motif, q) else ro }
                     qr < sSpr + 0.09 -> {
                         // dégradé du pied à l'accolade, décalé une lancette sur deux
                         // (étiquettes après @ : voir RosacePalette.overrides)
@@ -458,6 +500,29 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
                 add(q, role)
             }
             addLead(op, 1.6)   // plomb de structure autour de chaque ouverture
+        }
+    }
+
+    /** Pièce d'une branche de l'étoile (B2), d'après son centre de gravité :
+     *  « branchA » à gauche de l'axe de la branche (sens trigonométrique),
+     *  « branchB » à droite, « branchAxis » pour une pièce entière, centrée
+     *  sur l'axe, « branchRoot » pour un petit triangle centré entre deux
+     *  branches (RosacePalettes.ROUGE_B2, 4 nov. 2026). « branchAxisShade » :
+     *  pièce d'axe d'une branche tournée à l'opposé de la lumière du rendu
+     *  (haut gauche, GlassStyle.lightDirection ; orientation par défaut de la
+     *  rosace, −90°), comme « almondAShade » du dessin B1 (VERT_B2, 9 nov. 2026). */
+    private fun branchTag(motif: CentreMotif, q: Polygon): String {
+        val c = q.centroid.coordinate
+        val y = motif.local(c, motif.h).y
+        return when {
+            abs(y) < 1e-6 -> {
+                val ax = atan2(c.y, c.x)
+                val light = (cos(ax) - 0.35 * sin(ax)) / hypot(1.0, 0.35)
+                if (light > -0.05) "mid0@branchAxis" else "mid0@branchAxisShade"
+            }
+            abs(motif.local(c, 0.0).y) < 1e-6 -> "mid0@branchRoot"   // petit triangle entre deux branches
+            y > 0 -> "mid0@branchA"
+            else -> "mid0@branchB"
         }
     }
 
@@ -657,12 +722,18 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
             val inPanel = r > r3 && abs(yd) < hp
             val role = when {
                 r < r0 -> "cen0"
-                inArm -> if (r < r3) "cross" else "cen1"
+                inArm -> if (r < r3) "cross" else "cen1@armEnd"      // étiquettes : voir RosacePalette.overrides
                 r < r1 -> "cen1"
-                inLancet -> "acc"
-                inPanel -> if (r < r4) "acc" else "out1"
+                inLancet -> "acc@lancet"
+                inPanel -> if (r < r4) "acc@panel" else "out1@panelEnd"
                 r < r2 -> "mid0"
-                r < r3 -> "out1"
+                r < r3 -> {
+                    // pièce centrée sur une diagonale (au-delà de la tête de la lancette)
+                    val cc = f.centroid.coordinate
+                    val ac = atan2(cc.y, cc.x)
+                    val dd = ac - (sRound((ac - PI / 4) / (PI / 2)) * (PI / 2) + PI / 4)
+                    if (abs(dd) < 5.0 * PI / 180) "out1@diagonal" else "out1"
+                }
                 r < r4 -> "out0"
                 else -> "deepBig"
             }
@@ -676,6 +747,144 @@ class StyledRosace private constructor(val style: Style, val rotations: Int) {
             if (cl == "struct") sLineStrings(sDiff(ln, centreDisc)).map { it to cl } else listOf(ln to cl)
         }
         addClassLeads(leadLines, mapOf("struct" to 2.2, "second" to 1.0))
+    }
+
+    // ------------------------------------------------------------ C2 — Croix fleurie
+
+    /**
+     * C2 « Croix fleurie » (briefs du 17 nov. 2026 ; prototype Python
+     * /home/claude/kt/cdesign/c2b.py, planche « affinage 3 »). Unités du
+     * prototype : disque de rayon 0,965, ramené à 1 à la fin (scaleToUnit).
+     * - Croix évasée bleu profond, celle du dessin C (mêmes r0, hw0, hw1).
+     * - Disque central (r < r0) : une seule pièce, sans plomb intérieur,
+     *   ivoire « hostie » (étiquette « host » ; brief du 17 nov. au soir :
+     *   l'ancien oculus, disque blanc et anneau pâle coupés en quatre,
+     *   évoquait une cible) ; sa texture de verre est adoucie
+     *   (rosaceTextureScale, Rosace.kt). Couronne dorée jusqu'à rG.
+     * - Quatre pétales en amande (vesica) sur les diagonales, dont la pointe
+     *   traverse la bordure et se termine en or. Dans chaque pétale, une
+     *   FLAMME (amande dissymétrique, plus large près de la base) ; une
+     *   nervure sur la diagonale ; un arc à 0,60 coupe la bande du pétale.
+     * - Or : calyx = false (version B) → base de la flamme jusqu'à 0,36 ;
+     *   calyx = true (version A) → les pétales partent de 0,19, dans la
+     *   couronne, et sont dorés jusqu'à 0,30 (calice).
+     * - Fond : rayons à ±22,5° des diagonales, arc à 0,64 ; au-delà, bleu
+     *   un peu plus profond (« fieldOuter »). Bordure : rayons tous les 15°.
+     * Plombs : structure 2,2 (croix, couronne, bordure) ; contour des pétales
+     * 1,6 ; cercle du disque central 1,2 ; joints 0,6 (FINE).
+     * Rôles et étiquettes : cen0@host (disque central), cross,
+     * cen1 (couronne dorée), cen1@calyx (calice, version A),
+     * gold@flameBase (base dorée de la flamme, version B), gold@petalTip
+     * (pointe dans la bordure), mid1@petal (bande du pétale), mid0@flame
+     * (flamme), out0 (fond intérieur), out1@fieldOuter (fond extérieur),
+     * deepBig (bordure). Voir RosacePalettes.MARIAL_C2.
+     */
+    private fun buildCrossFlower(calyx: Boolean, shape: CrossFlowerShape = CrossFlowerShape.C2) {
+        val o = Coordinate(0.0, 0.0)
+        val r0 = 0.12          // disque central (hostie)
+        val rOut = 0.965
+        val rG = 0.25          // couronne dorée
+        val rB = 0.88          // bordure
+        val rMid = 0.64        // arc du fond
+        val hw0 = shape.hw0                        // C2 : 0,045
+        val hw1 = shape.hw1                        // C2 : 0,135
+        val rP0 = if (calyx) 0.19 else 0.25        // base des pétales
+        val goldR = if (calyx) 0.30 else 0.36      // limite de l'or
+        fun armHalf(x: Double) = hw0 + (hw1 - hw0) * ((x - r0) / (rOut - r0)).coerceIn(0.0, 1.0).let { Math.pow(it, shape.flareExponent) }
+        fun polyOf(cs: List<Coordinate>): Polygon = SGF.createPolygon((cs + cs[0]).toTypedArray())
+        // amande symétrique (deux arcs de cercle) de x0 à x1, demi-largeur w
+        fun vesica(x0: Double, x1: Double, w: Double, n: Int = 60): Polygon {
+            val m = (x0 + x1) / 2
+            val h = (x1 - x0) / 2
+            val rr = (h * h + w * w) / (2 * w)
+            val cy = w - rr
+            val t = Math.asin(h / rr)
+            val up = (0..n).map { k -> val u = -t + 2 * t * k / n; Coordinate(m + rr * sin(u), cy + rr * cos(u)) }
+            return polyOf(up + up.subList(1, n).reversed().map { Coordinate(it.x, -it.y) })
+        }
+        // flamme : amande dissymétrique, plus large côté base
+        fun flame(x0: Double, x1: Double, w: Double, p: Double, n: Int = 80): Polygon {
+            val up = (0..n).map { k -> val t = k.toDouble() / n; Coordinate(x0 + (x1 - x0) * t, w * sin(PI * Math.pow(t, p))) }
+            return polyOf(up + up.subList(1, n).reversed().map { Coordinate(it.x, -it.y) })
+        }
+        fun arcLine(r: Double, a0: Double, a1: Double, n: Int = 120) = sLine((0..n).map { sPolar(r, a0 + (a1 - a0) * it / n) })
+        fun rot(g: Geometry, a: Double) = sRotate(g, a)
+        val pet = vesica(rP0, rB + 0.045, 0.165)
+        val core = flame(rP0, 0.74, 0.062, 0.62)
+        val diagonals = (0 until 4).map { PI / 4 + it * PI / 2 }
+        val petals = diagonals.map { rot(pet, it) as Polygon }
+        val allPetals = sUnion(petals)
+        // croix (pour découper le fond)
+        val xs = (0..60).map { r0 - 0.03 + (1.05 - r0) * it / 60 }
+        val armPoly = polyOf(xs.map { Coordinate(it, armHalf(it)) } + xs.reversed().map { Coordinate(it, -armHalf(it)) })
+        val crossPoly = sDiff(sUnion((0 until 4).map { rot(armPoly, it * PI / 2) }), sPoint(o).buffer(r0, 720))
+        val side = xs.map { Coordinate(it, armHalf(it)) }
+
+        val lines = mutableListOf<Pair<Geometry, String>>()
+        for (a in (0 until 4).map { it * PI / 2 }) {
+            lines.add(rot(sLine(side), a) to "struct")
+            lines.add(rot(sLine(side.map { Coordinate(it.x, -it.y) }), a) to "struct")
+        }
+        lines.add(sCirc(o, r0, 720) to "second")      // disque central : une seule pièce (hostie)
+        lines.add((if (calyx) sDiff(sCirc(o, rG, 720), allPetals) else sCirc(o, rG, 720)) to "struct")
+        lines.add(sDiff(sCirc(o, rB, 720), allPetals) to "struct")
+        val goldDisc = sPoint(o).buffer(goldR, 360)
+        val deg = PI / 180
+        for ((q, d) in diagonals.withIndex()) {
+            val pq = petals[q]
+            val cq = rot(core, d)
+            lines.add(sLine(pq.exteriorRing.coordinates.toList()) to "motif")
+            val coreLine = sLine((cq as Polygon).exteriorRing.coordinates.toList())
+            lines.add((if (calyx) sDiff(coreLine, goldDisc) else coreLine) to "fine")
+            lines.add(sInter(rot(sLine(listOf(Coordinate(rP0, 0.0), Coordinate(rB + 0.095, 0.0))), d), pq.buffer(0.002)) to "fine")  // nervure
+            lines.add((if (calyx) sInter(arcLine(goldR, d - 0.5, d + 0.5), pq) else sInter(arcLine(goldR, d - 0.4, d + 0.4), cq)) to "fine")
+            lines.add(sDiff(sInter(arcLine(0.60, d - 0.4, d + 0.4), pq), cq) to "fine")
+            lines.add(sInter(arcLine(rB, d - 0.2, d + 0.2), pq) to "fine")                 // pointe dorée
+            for (s in listOf(1.0, -1.0)) {
+                lines.add(sDiff(sLine(listOf(sPolar(rG, d + s * 22.5 * deg), sPolar(rB, d + s * 22.5 * deg))), pq) to "fine")
+                for (k in 1..2) lines.add(sLine(listOf(sPolar(rB, d + s * k * 15 * deg), sPolar(1.02, d + s * k * 15 * deg))) to "fine")
+            }
+            lines.add(sDiff(sDiff(arcLine(rMid, d - 0.8, d + 0.8), pq), crossPoly) to "fine")
+            lines.add(sDiff(sLine(listOf(sPolar(r0, d), sPolar(rG, d))), pq) to "fine")
+        }
+        val cut = lines.flatMap { (g, _) -> sLineStrings(g) }
+        val faces = sArrangement(cut)
+        for (f in faces) {
+            val p = f.interiorPoint.coordinate
+            val r = hypot(p.x, p.y)
+            val a = atan2(p.y, p.x)
+            val ka = sRound(a / (PI / 2)) * (PI / 2)
+            val xa = p.x * cos(-ka) - p.y * sin(-ka)
+            val ya = p.x * sin(-ka) + p.y * cos(-ka)
+            val kd = sRound((a - PI / 4) / (PI / 2)) * (PI / 2) + PI / 4
+            val xd = p.x * cos(-kd) - p.y * sin(-kd)
+            val yd = p.x * sin(-kd) + p.y * cos(-kd)
+            val local = sPoint(Coordinate(xd, yd))
+            val inArm = r > r0 && abs(ya) < armHalf(xa)
+            val role = when {
+                r < r0 -> "cen0@host"
+                inArm -> "cross"
+                pet.contains(local) -> when {
+                    calyx && xd < goldR -> "cen1@calyx"
+                    r > rB -> "gold@petalTip"
+                    core.contains(local) -> if (!calyx && xd < goldR) "gold@flameBase" else "mid0@flame"
+                    else -> "mid1@petal"
+                }
+                r < rG -> "cen1"
+                r > rB -> "deepBig"
+                r < rMid -> "out0"
+                else -> "out1@fieldOuter"
+            }
+            add(f, role)
+        }
+        // Les côtés des bras partent de l'intérieur du cercle r0 pour le
+        // découpage ; leur plomb s'arrête au cercle (comme dans buildContemporary).
+        val centreDisc = sPoint(o).buffer(r0, 720)
+        val leadLines = lines.flatMap { (g, cl) ->
+            val gg = if (cl == "struct") sDiff(g, centreDisc) else g
+            sLineStrings(gg).map { it to cl }
+        }
+        addClassLeads(leadLines, mapOf("struct" to 2.2, "motif" to 1.6, "second" to 1.2))
     }
 
     // ------------------------------------------------------------ E — Art nouveau
@@ -857,11 +1066,29 @@ private class AlmondMotif(n: Int, rC: Double, rM: Double, w2: Double, w3: Double
     override fun role(p: Coordinate): String {
         val q = sPoint(local(p, h))
         return when {
-            innerPoly.contains(q) -> "mid1"
+            innerPoly.contains(q) -> "mid1@" + almondHalfTag(p)
             outerPoly.contains(q) -> "mid0"
-            smallPoly.contains(sPoint(local(p, 0.0))) -> "mid1"
+            smallPoly.contains(sPoint(local(p, 0.0))) -> "mid1@small"
             else -> "acc"
         }
+    }
+    /** Moitié d'une grande amande (coupée selon son axe) : « almondA » du côté
+     *  gauche de l'axe (sens trigonométrique, le même pour toutes : un léger
+     *  mouvement tournant), « almondB » de l'autre. « almondAShade » : moitié A
+     *  d'une amande tournée à l'opposé de la lumière du rendu (haut gauche,
+     *  GlassStyle.lightDirection ; orientation par défaut de la rosace, −90°).
+     *  Étiquettes utilisées par RosacePalettes.ROUGE_B1 (4 nov. 2026). */
+    private fun almondHalfTag(p: Coordinate): String {
+        // qualificatif « #axis » : demi-amande dont le secteur de 30° (compté
+        // depuis l'axe 0) tombe sur l'un des quatre axes ; il départage, de part
+        // et d'autre de chaque axe, une amande entièrement claire et une amande
+        // entièrement soutenue (NOEL_B1, 11 nov. 2026). Les palettes qui ne
+        // définissent pas « …#axis » prennent la couleur de l'étiquette seule.
+        val axis = if (Math.floorMod(sRound(atan2(p.y, p.x) / (PI / 6)), 3L) == 0L) "#axis" else ""
+        if (local(p, h).y <= 0) return "almondB$axis"
+        val ax = sRound((atan2(p.y, p.x) - h) / s) * s + h
+        val light = (cos(ax) - 0.35 * sin(ax)) / hypot(1.0, 0.35)
+        return (if (light < -0.5) "almondAShade" else "almondA") + axis
     }
     /** Médaillon : une croix de quatre amandes (mandorles) ivoire, sur les
      *  axes, dans un fond rose très pâle. */
@@ -949,7 +1176,7 @@ private class StarMotif(n: Int, rC: Double, rM: Double, w2: Double, w3: Double, 
         val inCore = SGF.createPolygon((innerRing + innerRing[0]).toTypedArray()).contains(sPoint(p))
         return when {
             inCore -> "cen0"
-            inStar -> "gold"
+            inStar -> "gold@medallionStar"   // étoile du médaillon (NOEL_B2) ; sinon or des perles
             else -> "veryPale"
         }
     }
@@ -963,7 +1190,8 @@ private class StarMotif(n: Int, rC: Double, rM: Double, w2: Double, w3: Double, 
         val tip = tips[j]
         val onAxis = sPolar(0.5 * rM, h + j * s)
         val inBranch = side(p, tip, tips[(j + skip) % n], onAxis) > 0 && side(p, tip, tips[(j - skip).mod(n)], onAxis) > 0
-        return if (inBranch) "mid0" else "acc"
+        // « mid0@branch » : précisé par branchTag (moitié A, B, ou pièce d'axe)
+        return if (inBranch) "mid0@branch" else "acc"
     }
 }
 

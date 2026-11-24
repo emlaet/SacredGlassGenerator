@@ -101,7 +101,61 @@ data class GlassStyle(
      *  translucide) d'une pièce à l'autre. Purement multiplicative
      *  (éclaircit la teinte, ne la lave pas vers le blanc — voir la
      *  note dans buildGlassFragmentShader). */
-    val opalescenceStrength: Double = 0.10
+    val opalescenceStrength: Double = 0.10,
+    /** Reflet continu des pétales de C2 noire (Black Reliquary, C2Noir.kt) ;
+     *  null pour toutes les autres recettes : shader inchangé. Renderer.kt le
+     *  renseigne lui-même à partir de la variante (VitrailConfig.c2Noir). */
+    val c2Shade: C2ShadeProgram? = null,
+    /** Transmission renforcée du verre SOMBRE (C2 noire, « verre noir
+     *  traversé par la lumière », brief du 23 nov. 2026) : quand true, le
+     *  shader lit pour chaque pièce un facteur p_transmission (1,0 = verre
+     *  actuel), qui amplifie la diffusion au cœur de la pièce et les
+     *  irrégularités internes (texture, stries), sans amplifier le dégradé
+     *  directionnel ni la lumière globale. Toujours purement multiplicatif.
+     *  Renderer.kt le renseigne lui-même (VitrailConfig.darkGlassTransmission) ;
+     *  false pour toutes les autres recettes : shader inchangé. */
+    val darkGlassTransmission: Boolean = false,
+    /** Modèle optique (C2 noire, phase 18) ; null pour toutes les autres
+     *  recettes : shader inchangé. Renderer.kt le renseigne à partir de
+     *  VitrailConfig.glassOptics. */
+    val optics: GlassOptics? = null
+)
+
+/**
+ * Modèle optique du verre (phase 18, 24 nov. 2026), désactivé par défaut.
+ *
+ * Deux phénomènes indépendants, tous deux purement multiplicatifs (aucun
+ * blanc ajouté, aucun reflet) et à très basse fréquence (aucune texture) :
+ *
+ *  - LUMIÈRE (transmission) : un champ lumineux CONTINU sur toute la rosace,
+ *    calculé pixel par pixel (et non plus une valeur par pièce), qui remplace
+ *    la lumière globale par pièce et le dégradé local identique dans chaque
+ *    pièce. Une seule source : plus forte en haut à gauche (lightDirection),
+ *    doucement irrégulière, comme un ciel derrière le vitrail.
+ *  - STRUCTURE (épaisseur) : dans chaque pièce, une seule variation douce
+ *    d'épaisseur, de direction et d'amplitude propres à la pièce (verre
+ *    soufflé plus épais d'un côté), choisies selon son rôle (Renderer.kt,
+ *    glassThickness). Plus épais = un peu moins de lumière transmise.
+ *
+ * Le halo central identique dans toutes les pièces est réduit (centerGlow).
+ */
+data class GlassOptics(
+    /** Amplitude du champ lumineux continu (0,16 = ±16 % de lumière). */
+    val fieldStrength: Double = 0.16,
+    /** Part irrégulière (très basse fréquence) du champ, 0 = dégradé pur. */
+    val fieldIrregularity: Double = 0.30,
+    /** Variation d'épaisseur par pièce (false = lumière seule). */
+    val thickness: Boolean = true,
+    /** Poids du halo central identique dans toutes les pièces (1 = actuel). */
+    val centerGlow: Double = 0.5,
+    /** Multiplicateur des amplitudes d'épaisseur de glassThickness (Renderer.kt). */
+    val thicknessScale: Double = 1.0,
+    /** Phase 18 ter : sur le verre clair, l'épaisseur ne fait qu'assombrir
+     *  (le côté mince n'éclaircit plus la pièce, ce qui écrêtait les blancs).
+     *  Passage progressif selon la clarté du verre (Renderer.kt, thicknessLift) :
+     *  comportement inchangé pour le verre sombre. false = comportement de la
+     *  phase 18 bis, shader identique. */
+    val clearGlassDarkenOnly: Boolean = false
 )
 
 interface GlassSystem {
@@ -129,8 +183,27 @@ class ProceduralGlassSystem : GlassSystem {
                 localLightStrength = style.localLightStrength,
                 lightDirection = style.lightDirection,
                 globalLightStrength = style.globalLightStrength,
-                opalescenceStrength = style.opalescenceStrength
+                opalescenceStrength = style.opalescenceStrength,
+                c2Shade = style.c2Shade,
+                transmission = style.darkGlassTransmission,
+                optics = style.optics
             )
+            parameter("textureScale", 1.0)   // valeur par défaut (Renderer.kt la fixe pour chaque pièce)
+            if (style.darkGlassTransmission) parameter("transmission", 1.0)   // Renderer.kt le fixe pour chaque pièce
+            if (style.optics != null) {
+                // Modèle optique : Renderer.kt fixe ces valeurs pour chaque pièce.
+                parameter("canvasOrigin", Vector2(0.0, 0.0))
+                parameter("canvasSize", Vector2(1.0, 1.0))
+                parameter("thickDir", Vector2(1.0, 0.0))
+                parameter("thickAmp", 0.0)
+                if (style.optics.clearGlassDarkenOnly) parameter("thickLift", 1.0)
+            }
+            if (style.c2Shade != null) {
+                // Reflet continu (C2 noire) : Renderer.kt fixe ces valeurs pour chaque pièce.
+                parameter("shadeGroup", 0.0)
+                parameter("modelOrigin", Vector2(0.0, 0.0))
+                parameter("modelSize", Vector2(1.0, 1.0))
+            }
         }
     }
 
@@ -146,8 +219,14 @@ fun buildGlassFragmentShader(
     localLightStrength: Double,
     lightDirection: Vector2,
     globalLightStrength: Double,
-    opalescenceStrength: Double
+    opalescenceStrength: Double,
+    c2Shade: C2ShadeProgram? = null,
+    transmission: Boolean = false,
+    optics: GlassOptics? = null
 ): String {
+    fun f(x: Double) = String.format(java.util.Locale.ROOT, "%.6f", x)
+    val centerW = optics?.centerGlow ?: 1.0
+    val localW = if (optics != null) 0.0 else localLightStrength
     return """
 
         vec2 uv = c_boundsPosition.xy;
@@ -196,10 +275,10 @@ fun buildGlassFragmentShader(
         // lieu d'une ondulation décorative sans rapport)
         float localDirectional = dot(uv - vec2(0.5), lightDir);
 
-        float light =
-            0.78 +
-            0.30 * fieldLight +
-            localDirectional * $localLightStrength;
+        float light = ${if (optics == null) (if (!transmission) "0.78 + 0.30 * fieldLight + localDirectional * $localLightStrength;"
+    else "0.93 + (0.30 * fieldLight - 0.15) * p_transmission + localDirectional * $localLightStrength;")
+    else (if (!transmission) "0.93 + (0.30 * fieldLight - 0.15) * ${f(centerW)} + localDirectional * ${f(localW)};"
+    else "0.93 + (0.30 * fieldLight - 0.15) * p_transmission * ${f(centerW)} + localDirectional * ${f(localW)};")}
 
 
         // --------------------------------------------------
@@ -243,7 +322,10 @@ fun buildGlassFragmentShader(
         // nets) plutôt qu'un flou uniformément doux.
         material = sign(material) * pow(abs(material), 0.60);
 
-        light *= 1.0 + material * $textureStrength;
+        // p_textureScale : 1.0 pour toutes les pièces (texture inchangée),
+        // moins pour une pièce dont le verre doit rester presque uni
+        // (disque « hostie » de la rosace C2 ; Renderer.kt, rosaceTextureScale).
+        light *= 1.0 + material * $textureStrength * p_textureScale${if (transmission) " * min(p_transmission, 1.8)" else ""};
 
 
         // --------------------------------------------------
@@ -278,7 +360,7 @@ fun buildGlassFragmentShader(
             streakFraction.y
         );
 
-        light *= 1.0 + (streakNoise - 0.5) * $streakStrength;
+        light *= 1.0 + (streakNoise - 0.5) * $streakStrength * p_textureScale${if (transmission) " * min(p_transmission, 1.8)" else ""};
 
 
         // --------------------------------------------------
@@ -312,7 +394,7 @@ fun buildGlassFragmentShader(
 
         float globalLight = globalGradient * 0.7 + (globalNoise - 0.5) * 0.6;
 
-        light *= 1.0 + globalLight * $globalLightStrength;
+        ${if (optics == null) "light *= 1.0 + globalLight * $globalLightStrength;" else opticsGlsl(optics)}
 
 
         // --------------------------------------------------
@@ -320,6 +402,8 @@ fun buildGlassFragmentShader(
         // --------------------------------------------------
 
         light *= 1.0 + p_opalescence * $opalescenceStrength * 0.6;
+
+${if (c2Shade != null) c2ShadeGlsl(c2Shade) else ""}
 
 
         // --------------------------------------------------
@@ -344,4 +428,31 @@ fun buildGlassFragmentShader(
         x_fill.rgb *= light;
 
     """.trimIndent()
+}
+
+/** Code GLSL du modèle optique (phase 18) : remplace la lumière globale par
+ *  pièce. Position continue sur le canevas : p_canvasOrigin + uv × p_canvasSize. */
+fun opticsGlsl(o: GlassOptics): String {
+    fun f(x: Double) = String.format(java.util.Locale.ROOT, "%.6f", x)
+    return """
+        // ---- MODÈLE OPTIQUE (phase 18) ----
+        // Lumière : champ continu, une seule source (haut gauche), très basse fréquence.
+        vec2 posO = p_canvasOrigin + uv * p_canvasSize;
+        float gradO = clamp(dot(posO - vec2(0.5), lightDir) * 2.0, -1.0, 1.0);
+        vec2 qO = posO * 1.3 + vec2(3.1, 7.7);
+        vec2 cO = floor(qO); vec2 fO = fract(qO); fO = fO * fO * (3.0 - 2.0 * fO);
+        float nO = mix(mix(fract(sin(dot(cO, vec2(127.1, 311.7))) * 43758.5453),
+                           fract(sin(dot(cO + vec2(1.0, 0.0), vec2(127.1, 311.7))) * 43758.5453), fO.x),
+                       mix(fract(sin(dot(cO + vec2(0.0, 1.0), vec2(127.1, 311.7))) * 43758.5453),
+                           fract(sin(dot(cO + vec2(1.0, 1.0), vec2(127.1, 311.7))) * 43758.5453), fO.x), fO.y) * 2.0 - 1.0;
+        float fieldO = gradO * ${f(1.0 - o.fieldIrregularity)} + nO * ${f(o.fieldIrregularity)};
+        light *= 1.0 + fieldO * ${f(o.fieldStrength)};
+        ${if (o.thickness) """
+        // Structure : une seule variation d'épaisseur douce dans la pièce.
+        float tO = dot(uv - vec2(0.5), p_thickDir);
+        float sO = 2.0 * smoothstep(-0.5, 0.5, tO) - 1.0;
+        ${if (o.clearGlassDarkenOnly)
+        "light *= 1.0 - p_thickAmp * (max(sO, 0.0) + min(sO, 0.0) * p_thickLift);"
+    else "light *= 1.0 - p_thickAmp * sO;"}""" else ""}
+    """
 }

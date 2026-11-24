@@ -28,7 +28,11 @@ fun exportHighResolution(
     config: VitrailConfig,
     exportWidth: Int,
     exportHeight: Int,
-    referenceWidth: Double
+    referenceWidth: Double,
+    /** Fichier de sortie imposé (exports en série : nom lisible, sans
+     *  renommage après coup, qui échouait parfois sous Windows) ; null =
+     *  exports/vitrail-seed<seed>-<horodatage>.png, comme avant. */
+    outputFile: File? = null
 ): File {
 
     val exportPixelScale = exportWidth / referenceWidth
@@ -54,7 +58,8 @@ fun exportHighResolution(
             config,
             exportWidth.toDouble(),
             exportHeight.toDouble(),
-            exportPixelScale
+            exportPixelScale,
+            transparentBackground = true
         )
     }
 
@@ -62,7 +67,7 @@ fun exportHighResolution(
     exportsFolder.mkdirs()
 
     val fileName = "vitrail-seed${config.seed}-${System.currentTimeMillis()}.png"
-    val outputFile = exportsFolder.resolve(fileName)
+    val outputFile = outputFile?.absoluteFile?.also { it.parentFile?.mkdirs() } ?: exportsFolder.resolve(fileName)
     // async = false : on attend la fin de l'écriture avant de
     // continuer, pour pouvoir libérer exportTarget juste après
     // sans risquer une sauvegarde encore en cours.

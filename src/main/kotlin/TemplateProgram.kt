@@ -19,7 +19,14 @@ import org.openrndr.extensions.Screenshots
 // seulement la "recette" (VitrailConfig) et gère la fenêtre et les
 // touches. L'export haute résolution est dans Export.kt.
 //
-// Réglage actuel : BAIE EN ARC BRISÉ avec croix rayonnante (format
+// Réglage actuel : rosace C2 noire (c2NoirRecipe, C2Noir.kt ; touche « n » :
+// export des six variantes ; touche « v » : étude du verre noir, douze rendus ;
+// touche « w » : test « lecture vitrail », six rendus ; touche « x » : « soleil noir », trois rendus ;
+// touche « y » : phase 15, perfectionnement des trois finalistes, douze rendus ;
+// touche « z » : phase 16, dix rendus ; touche « s » : phase 16 bis, soleil noir, quatre rendus ;
+// touche « b » : phase 16 ter, soleil noir, quatre rendus ;
+// touche « p » : phase 17, quatre rendus ; touche « o » : phase 18, six rendus ;
+// touche « i » : phase 18 bis, trois rendus). Réglage précédent : BAIE EN ARC BRISÉ avec croix rayonnante (format
 // 2:3, pour les tirages muraux — voir crossBayRecipe, angelBayRecipe et
 // Bay.kt). Autres croix (ShapedCross.kt), avec ou sans baie : tréflée,
 // celtique et rondouillarde (trefoilRecipe, celticRecipe, roundedRecipe ;
@@ -291,7 +298,7 @@ fun main() = application {
         //   PrintFormat(300.0, 225.0, 300.0)    — 30 × 22,5 cm (4:3), 300 ppp : l'export actuel
         // Ne s'applique ni aux motifs raccordables ni au champ de rayons (qui
         // a son propre format, plus bas).
-        val printFormat: PrintFormat? = null
+        val printFormat: PrintFormat? = PrintFormat(600.0, 600.0, 300.0)
 
         val config = VitrailConfig(
             seed = seed,
@@ -736,7 +743,7 @@ fun main() = application {
         //   RosaceSchemes.ROSE             — rose (Gaudete, Laetare)
         //   RosaceSchemes.MARIAL           — bleu marial (dévotionnel)
         //   RosaceSchemes.PIERRE_ET_PLOMB  — pierre et plombs seuls, verre blanc cassé
-    val rosaceScheme = RosaceSchemes.PIERRE_ET_PLOMB
+        val rosaceScheme = RosaceSchemes.PIERRE_ET_PLOMB
         // <-- swap ici : format de la rosace (carré). 300 × 300 mm à 300 ppp
         // = export de 3543 × 3543 px ; PrintFormat(600.0, 600.0, 300.0) pour
         // un tirage de 60 × 60 cm (7087 × 7087 px). Hors du disque, l'export
@@ -771,22 +778,44 @@ fun main() = application {
         //   OrientalRosaceCompositionSystem(StyledRosace.Style.ORIENTAL_INTERLACE, rosaceRotations)
         //                                                                      — B3, entrelacs (pierre autour, entrelacs en verre)
         //   ContemporaryRosaceCompositionSystem()                              — C, contemporaine, croix pattée (tout en verre)
+        //   CrossFlowerRosaceCompositionSystem(calyx = false)                  — C2, croix fleurie, version B : or discret
+        //   CrossFlowerRosaceCompositionSystem(calyx = true)                   — C2, croix fleurie, version A : calice doré
+        //                                                                      (tout en verre ; palettes *_C2 : MARIAL_C2, ROUGE_C2, VERT_C2)
         //   CurvilinearRosaceCompositionSystem(rotations = rosaceRotations)    — B d'origine, soufflets (pierre)
-        val rosaceDesign: CompositionSystem = ContemporaryRosaceCompositionSystem()
+        val rosaceDesign: CompositionSystem = MedievalRosaceCompositionSystem(rotations = rosaceRotations)
         // <-- swap ici : palette (RosacePalettes, Rosace.kt) :
         //   RosacePalettes.GRENAT_OR        — rose, grenat et or (Gaudete, Laetare) [validée]
-        //   RosacePalettes.VERT_IVOIRE_OR   — vert, ivoire et or (Temps ordinaire) [validée]
+        //   RosacePalettes.VERT_A, VERT_B1, VERT_B2, VERT_C
+        //                                   — vert émeraude et forêt, or pâle (Temps ordinaire)
+        //                                     [validées] : une par dessin (B2 : médaillon étoilé)
+        //   RosacePalettes.VERT_C2          — vert, C2 croix fleurie : croix forêt (V2) [provisoire]
         //   RosacePalettes.NOEL_A, NOEL_B1, NOEL_B2, NOEL_C
         //                                   — blanc, ivoire et or (Noël) [validées] : une par dessin,
         //                                     à associer au dessin du même nom (B2 : médaillon étoilé)
-        //   RosacePalettes.JOIE_ATTENTE     — la joie dans l'attente (violet, rose au cœur)
-        //   RosacePalettes.GRENAT_PRUNE     — grenat et prune
-        //   RosacePalettes.ARCTIC_NIGHT     — bleu nuit et glace, or pâle (Noël, hiver)
+        //   RosacePalettes.ROUGE_A, ROUGE_B1, ROUGE_B2, ROUGE_C
+        //                                   — rouge « feu au centre » (Passion, Pentecôte, apôtres,
+        //                                     martyrs) [validées] : une par dessin (B2 : médaillon étoilé)
+        //   RosacePalettes.ROUGE_C2         — rouge, C2 croix fleurie : croix grenat (R3) [provisoire]
+        //   RosacePalettes.VIOLET_A, VIOLET_B1, VIOLET_B2, VIOLET_C
+        //                                   — violet indigo et argent (Avent, Carême) [validées] :
+        //                                     une par dessin (B2 : médaillon étoilé)
+        //   RosacePalettes.NOIR_BLEUTE_A, _B1, _B2, _C
+        //                                   — noir gris bleuté et argent (Toussaint, défunts ;
+        //                                     monochrome, gothique) [validées] : une par dessin
+        //                                     (B2 : médaillon étoilé)
+        //   RosacePalettes.CATHEDRALE       — bleu et rouge, or et ivoire (A, B1, B2) [validée]
+        //   RosacePalettes.CATHEDRALE_C     — la même pour C, croix en or [validée]
+        //   RosacePalettes.MARIAL_MAJESTE_A, _B1, _B2
+        //                                   — bleu marial « majesté et lumière » [validées] :
+        //                                     une par dessin (B2 : médaillon étoilé)
+        //   RosacePalettes.MARIAL_C         — bleu marial, C : croix bleu profond [à valider]
+        //   RosacePalettes.MARIAL_C2        — bleu marial PROVISOIRE pour C2 (croix fleurie), lumière 20 :
+        //                                     sert à juger le dessin, pas une palette validée
         //   RosacePalettes.EMERALD_DEPTHS   — émeraude et or
         //   RosacePalettes.OCEAN_REVERIE    — sarcelle et vert d'eau
         //   RosacePalettes.SUNSET_REVERIE   — bordeaux, corail et or
-        //   RosacePalettes.ORCHID_SHADOW    — prune et orchidée (à l'essai)
-        val rosacePaletteChoice = RosacePalettes.NOEL_C
+        //   RosacePalettes.ORCHID_SHADOW    — prune et orchidée (écartée pour le violet liturgique)
+        val rosacePaletteChoice = RosacePalettes.GRENAT_OR
         // <-- swap ici : pierre du remplage (A et B ; C n'en a pas) :
         //   null                               — celle de la palette (claire)
         //   RosacePalettes.PIERRE_ANTHRACITE   — pierre sombre (#4A4743)
@@ -808,6 +837,55 @@ fun main() = application {
             rosacePalette = if (stoneOverride != null) rosacePaletteChoice.copy(stone = stoneOverride) else rosacePaletteChoice,
             bay = null,
             printFormat = PrintFormat(300.0, 300.0, 300.0)
+        )
+
+        // ------------------------
+        // C2 NOIRE — finalistes de la phase 13 (C2Noir.kt)
+        // ------------------------
+        // Rosace C2 « Croix fleurie », version A (calice), dans une des six
+        // variantes. Chaque variante est une recette complète et indépendante
+        // (matières, reflets, plombs, silhouette de la croix) : la modifier ne
+        // touche ni les autres variantes ni les autres palettes.
+        // Touche « n » : export des six variantes (voir plus bas).
+        // <-- swap ici : variante affichée (et exportée avec la touche « e ») :
+        //   C2NoirVariants.V1_BC       — Obsidienne et givre, V1-bc : pétales d'obsidienne couronnés de givre
+        //   C2NoirVariants.V1_BC_NOIR  — Obsidienne et givre, V1-bc noir : obsidienne plus noire
+        //   C2NoirVariants.OG_K2       — Obsidienne et givre, OG-K2 : pétales de givre, croix argent ancien patiné
+        //   C2NoirVariants.ON_K2       — Onyx et nacre, ON-K2 : géométrie d'origine, nacre gris-perle
+        //   C2NoirVariants.ON_K4       — Onyx et nacre, ON-K4 : croix moins évasée (ON1), nacre blanche froide
+        //   C2NoirVariants.BR_C1       — Black Reliquary, BR-C1 : onyx sculpté, reflet continu, croix platine sombre
+        val c2NoirChoice = C2NoirVariants.OG_K2
+        val c2NoirRecipe = c2NoirConfig(config, c2NoirChoice)
+
+
+        // ------------------------
+        // ORNEMENT EN VERRE CLAIR (rosace A ; 76 mm, impression UV opaque)
+        // ------------------------
+        // Seuls la pierre et les plombs, d'une même couleur, sont
+        // imprimés : les pièces restent transparentes dans le PNG, et le verre
+        // de l'ornement se voit à travers. Export (touche « e ») : 1800 × 1800 px
+        // (76,2 mm à 600 ppp). Aperçu : les pièces prennent la couleur du fond
+        // (ici un vert sapin).
+        // <-- swap ici : finesse du trait (pierre et plombs étant de la même
+        // couleur, les plombs élargissent la pierre de part et d'autre) :
+        //   ornamentStone : épaisseur de la pierre (1,0 = dessin validé ; 0,8 ; 0,65 ;
+        //                   pas en dessous de 0,65 : à 0,6, de petites pièces disparaissent)
+        //   ornamentLead  : épaisseur des plombs (2,0 ≈ 0,26 mm imprimés ; 1,0 ≈ 0,13 mm)
+        val ornamentStone = 0.8
+        val ornamentLead = 1.0
+        // <-- swap ici : couleur du trait (pierre et plombs, Rosace.kt) :
+        //   RosacePalettes.VERRE_SABLE   — ivoire « verre sablé » #F4EFE6
+        //   RosacePalettes.VERRE_ROUGE   — rouge de Noël #D7261E
+        //   RosacePalettes.VERRE_OR      — ton doré mat #C9A23A
+        //   RosacePalettes.VERRE_ARGENT  — ton argenté mat #C3C8CE
+        val ornamentPalette = RosacePalettes.VERRE_ROUGE
+        val ornamentRecipe = rosaceDesignRecipe.copy(
+            compositionSystem = MedievalRosaceCompositionSystem(rotations = rosaceRotations, sizeRatio = 0.985, stoneScale = ornamentStone),
+            rosacePalette = ornamentPalette,
+            leadStyle = config.leadStyle.copy(width = ornamentLead, color = ornamentPalette.lead),
+            rosaceClearGlass = true,
+            backgroundColor = ColorRGBa.fromHex("#1E3B2A"),
+            printFormat = PrintFormat(76.2, 76.2, 600.0)
         )
 
 
@@ -836,8 +914,10 @@ fun main() = application {
         //   rayFieldRecipe       — fond « champ de rayons » (carte de vœux…), format libre
         //   rosaceRecipe         — rosace rayonnante gothique (RosaceSchemes)
         //   rosaceDesignRecipe   — rosaces A, B1, B2, B3, C (RosacePalettes)
+        //   ornamentRecipe       — rosaces avec pierre et plombs seulement
+        //   c2NoirRecipe         — rosace C2 noire, variante c2NoirChoice (C2Noir.kt)
         //   config               — ange (ou croix) défini ci-dessus
-        val activeConfig = rosaceDesignRecipe
+        val activeConfig = c2NoirRecipe
 
         // Aperçu répété 2 × 2 (touche « r ») : pour vérifier le raccord
         // du motif. Chaque quart affiche la tuile entière, réduite.
@@ -891,6 +971,123 @@ fun main() = application {
                     exportHeight = exportHeight,
                     referenceWidth = width.toDouble()
                 )
+            }
+            if (it.name == "n") {
+                // C2 noire : exporte les six variantes, mêmes conditions de rendu,
+                // dans exports/c2noir/<identifiant>.png (V1-bc.png, V1-bc-noir.png,
+                // OG-K2.png, ON-K2.png, ON-K4.png, BR-C1.png). Quelques dizaines
+                // de secondes : la fenêtre ne répond pas pendant l'export.
+                exportC2NoirSet(drawer, config, width.toDouble())
+            }
+            if (it.name == "v") {
+                // C2 noire, étude « verre noir traversé par la lumière » (23 nov.) :
+                // trois témoins (rosace bleue, OG-K2, V1-BC actuels) puis les neuf
+                // propositions (PA-OG-K2-A/B/C, PA-V1-BC-A/B/C, PB-bleue-noire-A/B/C),
+                // mêmes conditions de rendu, dans exports/c2noir_verre/<identifiant>.png.
+                // Environ une minute : la fenêtre ne répond pas pendant l'export.
+                exportC2NoirGlassStudy(drawer, config, width.toDouble())
+            }
+            if (it.name == "w") {
+                // C2 noire, test « lecture vitrail » (plombs noirs, verre relevé) :
+                // six rendus dans exports/c2noir_vitrail/<identifiant>.png.
+                exportC2NoirVitrailTest(drawer, config, width.toDouble())
+            }
+            if (it.name == "x") {
+                // C2 noire, « soleil noir » : couleurs de PB-C, plombs noirs, sombres
+                // relevés à 0,18 / 0,20 / 0,22 ; trois rendus dans exports/c2noir_soleil/.
+                exportC2NoirSoleilNoir(drawer, config, width.toDouble())
+            }
+            if (it.name == "y") {
+                // C2 noire, phase 15 (perfectionnement des trois finalistes) :
+                // douze rendus dans exports/c2noir_finalistes/<identifiant>.png.
+                exportC2NoirFinalistes(drawer, config, width.toDouble())
+            }
+            if (it.name == "z") {
+                // C2 noire, phase 16 (perfectionnement de D, A1 et C3) :
+                // dix rendus dans exports/c2noir_phase16/<identifiant>.png.
+                exportC2NoirPhase16(drawer, config, width.toDouble())
+            }
+            if (it.name == "s") {
+                // C2 noire, phase 16 bis (soleil noir, un seul univers de noirs) :
+                // quatre rendus dans exports/c2noir_phase16/<identifiant>.png.
+                exportC2NoirPhase16bSoleil(drawer, config, width.toDouble())
+            }
+            if (it.name == "b") {
+                // C2 noire, phase 16 ter (soleil noir, une seule famille de noirs,
+                // pétales compris) : quatre rendus dans exports/c2noir_phase16/.
+                exportC2NoirPhase16cSoleil(drawer, config, width.toDouble())
+            }
+            if (it.name == "p") {
+                // C2 noire, phase 17 (matérialité du verre et lumière traversante) :
+                // quatre rendus dans exports/c2noir_phase17/<identifiant>.png.
+                exportC2NoirPhase17(drawer, config, width.toDouble())
+            }
+            if (it.name == "o") {
+                // C2 noire, phase 18 (modèle optique du verre) : six rendus
+                // dans exports/c2noir_phase18/<identifiant>.png.
+                exportC2NoirPhase18(drawer, config, width.toDouble())
+            }
+            if (it.name == "i") {
+                // C2 noire, phase 18 bis (modèle optique, dosage renforcé) :
+                // trois rendus dans exports/c2noir_phase18/<identifiant>.png.
+                exportC2NoirPhase18b(drawer, config, width.toDouble())
+            }
+            if (it.name == "u") {
+                // C2 noire, phase 18 ter (verre clair : l'épaisseur ne fait
+                // qu'assombrir) : trois rendus dans exports/c2noir_phase18/.
+                exportC2NoirPhase18c(drawer, config, width.toDouble())
+            }
+            if (it.name == "j") {
+                // C2 noire, phase 19 (diffusion de la lumière dans le verre,
+                // sans traverser les plombs) : six rendus dans
+                // exports/c2noir_phase19/<identifiant>.png.
+                exportC2NoirPhase19(drawer, config, width.toDouble())
+            }
+            if (it.name == "k") {
+                // C2 noire, phase 21 (exploration chromatique : noir strict,
+                // noir nuancé, noir et anthracite) : neuf rendus dans
+                // exports/c2noir_phase21/<identifiant>.png.
+                exportC2NoirPhase21(drawer, config, width.toDouble())
+            }
+            if (it.name == "l") {
+                // C2 noire, phase 21 bis (B et C d'OG et de V1 dans une seule
+                // famille bleu-noir) : quatre rendus dans exports/c2noir_phase21/.
+                exportC2NoirPhase21b(drawer, config, width.toDouble())
+            }
+            if (it.name == "m") {
+                // C2 noire, phase 22 (huit pistes d'amélioration) : quatorze
+                // rendus dans exports/c2noir_phase22/<identifiant>.png.
+                exportC2NoirPhase22(drawer, config, width.toDouble())
+            }
+            if (it.name == "q") {
+                // C2 noire, phase 22 bis (combinaisons par famille) : cinq
+                // rendus dans exports/c2noir_phase22/<identifiant>.png.
+                exportC2NoirPhase22b(drawer, config, width.toDouble())
+            }
+            if (it.name == "t") {
+                // C2 noire, phase 22 ter (hostie remontée, neutre ou ivoire) :
+                // six rendus dans exports/c2noir_phase22/<identifiant>.png.
+                exportC2NoirPhase22c(drawer, config, width.toDouble())
+            }
+            if (it.name == "g") {
+                // C2 noire, phase 23 (OG-K2 : givre des pétales et bras de la
+                // croix) : cinq rendus dans exports/c2noir_phase23/.
+                exportC2NoirPhase23(drawer, config, width.toDouble())
+            }
+            if (it.name == "h") {
+                // C2 noire, phase 23 bis (OG-K2 : anneau autour de l'hostie)
+                // : trois rendus dans exports/c2noir_phase23/.
+                exportC2NoirPhase23b(drawer, config, width.toDouble())
+            }
+            if (it.name == "c") {
+                // C2 noire, phase 23 ter (OG-K2 : anneau bleu-noir) : deux
+                // rendus dans exports/c2noir_phase23/.
+                exportC2NoirPhase23c(drawer, config, width.toDouble())
+            }
+            if (it.name == "f") {
+                // C2 noire, phase 24 : versions finales OG, V1 et SN dans
+                // exports/c2noir_finales/.
+                exportC2NoirPhase24(drawer, config, width.toDouble())
             }
         }
 

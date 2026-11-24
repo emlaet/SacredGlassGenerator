@@ -1,5 +1,8 @@
 import org.openrndr.color.ColorRGBa
+import org.openrndr.draw.BlendMode
 import org.openrndr.draw.Drawer
+import org.openrndr.draw.isolated
+import org.openrndr.draw.isolatedWithTarget
 import org.openrndr.math.Vector2
 import kotlin.random.Random
 
@@ -91,7 +94,83 @@ data class VitrailConfig(
     /** Palette par rôles des nouveaux dessins de rosace (rosace médiévale
      *  sobre ; ignorée par la rosace rayonnante, qui suit rosaceScheme) —
      *  voir RosacePalettes, Rosace.kt. */
-    val rosacePalette: RosacePalette = RosacePalettes.GRENAT_OR
+    val rosacePalette: RosacePalette = RosacePalettes.GRENAT_OR,
+
+    /** Rosace en VERRE CLAIR (ornement en verre imprimé en UV opaque) : seuls
+     *  la pierre et les plombs sont dessinés ; les pièces restent vides,
+     *  transparentes à l'export (le verre du support se voit à travers) et de
+     *  la couleur du fond (backgroundColor) dans l'aperçu. Ignoré hors
+     *  RosaceGuide. Aucun effet sur la génération ni sur les tirages. */
+    val rosaceClearGlass: Boolean = false,
+
+    /** Rosace C2 noire (phase 14) : une des variantes de C2NoirVariants
+     *  (C2Noir.kt), qui fixe les couleurs, les matières, les reflets et la
+     *  couleur des plombs de la rosace C2 ; null = palettes habituelles
+     *  (rosacePalette). Ignorée hors RosaceGuide. Aucun tirage. Voir
+     *  c2NoirConfig, qui construit la recette complète d'une variante. */
+    val c2Noir: C2NoirVariant? = null,
+
+    /** Verre noir traversé par la lumière (brief du 23 nov. 2026) : facteur
+     *  de transmission maximal du verre SOMBRE (2,0 = diffusion au cœur des
+     *  pièces et irrégularités internes deux fois plus marquées ; voir
+     *  GlassStyle.darkGlassTransmission). Chaque pièce reçoit un facteur
+     *  selon la clarté de son verre (darkGlassFactor) : maximal pour le verre
+     *  très sombre, 1,0 pour le verre clair. null = verre actuel, partout. */
+    val darkGlassTransmission: Double? = null,
+
+    /** Rosaces : largeur minimale des plombs fins (joints entre pièces,
+     *  nervures), en multiple de leadStyle.width (C2 noire, 23 nov. 2026 :
+     *  à 0,6 ils se lisaient comme des traits de plume). null = hiérarchie
+     *  du dessin inchangée. */
+    val minFineLeadFactor: Double? = null,
+
+    /** Rosaces C2 : épaisseur des plombs fins PAR CATÉGORIE, en multiple de
+     *  leadStyle.width (C2 noire, phase 15) : séparations intérieures (fond,
+     *  bordure, couronne) et nervures des pétales (toutes les lignes fines à
+     *  l'intérieur d'un pétale : nervure, flamme, calice, pointe). Les plombs
+     *  structurels ne changent pas. null = épaisseur du dessin. */
+    val fineLeadJointFactor: Double? = null,
+    val fineLeadNervureFactor: Double? = null,
+
+    /** Verre noir traversé par la lumière : variation de la transmission d'une
+     *  pièce à l'autre (0,25 = ±25 %), déterministe (fonction de l'indice de la
+     *  pièce, sans tirage aléatoire) : certaines pièces montrent un peu plus
+     *  la différence entre leur centre et leurs bords. null = aucune. */
+    val transmissionVariation: Double? = null,
+
+    /** Modèle optique du verre (phase 18, voir GlassOptics dans Glass.kt) ;
+     *  null = rendu actuel. */
+    val glassOptics: GlassOptics? = null,
+
+    /** Diffusion de la lumière dans la masse du verre, sans jamais traverser
+     *  les plombs (phase 19, voir GlassDiffusion.kt) ; null = rendu actuel. */
+    val glassDiffusion: GlassDiffusion? = null,
+
+    /** Phase 22 : réglages par rôle de pièce de rosace (voir PieceTweak) ;
+     *  vide = rendu actuel. */
+    val pieceTweaks: Map<String, PieceTweak> = emptyMap(),
+    /** Phase 22 : soudures aux croisements des plombs (RosaceDetails.kt). */
+    val leadJoints: LeadJoints? = null,
+    /** Phase 22 : grisaille sur le verre givré des pétales (RosaceDetails.kt). */
+    val petalGrisaille: PetalGrisaille? = null
+)
+
+/** Phase 22 : réglage d'un rôle de pièce de rosace, appliqué au moment du
+ *  dessin du verre (après la palette). Chaque champ null ou neutre laisse
+ *  le rendu inchangé. */
+data class PieceTweak(
+    /** Couleur imposée (remplace celle de la palette). */
+    val color: String? = null,
+    /** Échelle de texture imposée (1,0 = texture normale ; hostie : 0,3). */
+    val textureScale: Double? = null,
+    /** Multiplicateur de l'amplitude d'épaisseur (modèle optique). */
+    val thicknessScale: Double = 1.0,
+    /** Épaisseur orientée vers le centre de la rosace : la pièce est plus
+     *  épaisse, donc plus sombre, du côté du centre. */
+    val thicknessInward: Boolean = false,
+    /** Ne s'applique qu'aux pièces dont la couleur a une clarté OKLab au
+     *  plus égale à ce seuil (null = toutes). */
+    val maxLightness: Double? = null
 )
 
 /**
@@ -134,7 +213,9 @@ fun renderVitrail(
     config: VitrailConfig,
     canvasWidth: Double,
     canvasHeight: Double,
-    requestedPixelScale: Double
+    requestedPixelScale: Double,
+    /** true à l'export (fond transparent) : voir rosaceClearGlass. */
+    transparentBackground: Boolean = false
 ) {
 
     // Baie : l'échelle du plomb suit la largeur de la BAIE (voir
@@ -163,7 +244,15 @@ fun renderVitrail(
     )
 
     // Système 5 — Verre
-    val glassShadeStyle = config.glassSystem.createShadeStyle(config.glassStyle)
+    // (Rosace C2 noire : couleurs, textures et reflet continu des pétales
+    // propres à la variante, voir C2Noir.kt.)
+    val c2Variant = if (guide is RosaceGuide) config.c2Noir else null
+    val c2Data = if (guide is RosaceGuide && c2Variant != null) c2NoirPieceData(guide.unitPieces, c2Variant) else null
+    val c2Shade = if (guide is RosaceGuide && c2Variant != null) c2ShadeProgram(guide, c2Variant) else null
+    var glassStyleUsed = if (c2Shade != null) config.glassStyle.copy(c2Shade = c2Shade) else config.glassStyle
+    if (config.darkGlassTransmission != null) glassStyleUsed = glassStyleUsed.copy(darkGlassTransmission = true)
+    if (config.glassOptics != null) glassStyleUsed = glassStyleUsed.copy(optics = config.glassOptics)
+    val glassShadeStyle = config.glassSystem.createShadeStyle(glassStyleUsed)
 
     val edgeCurveCache = mutableMapOf<String, EdgeCurve>()
 
@@ -191,7 +280,7 @@ fun renderVitrail(
     }
 
     // Remplissage (Palette + Verre)
-    drawnCells.forEachIndexed { drawnIndex, cell ->
+    val drawGlassPieces: () -> Unit = { drawnCells.forEachIndexed { drawnIndex, cell ->
 
         // Pièce canonique d'origine (même couleur, même matière).
         val index = drawnIndex % cells.size
@@ -204,6 +293,27 @@ fun renderVitrail(
         // segments), contour construit directement, sans le cache d'arêtes.
         val contour = if (guide is RosaceGuide) straightContour(cell)
         else createCurvedContour(cell, edgeCurveCache, scaledCurvatureAmount)
+
+        // Rosace en verre clair : la pièce est « vidée » (la pierre, peinte
+        // en disque plein, est effacée à cet endroit). À l'export, REPLACE
+        // écrit une transparence totale ; la teinte (celle des plombs, alpha
+        // 0) évite un liseré coloré au bord des plombs, qui recouvrent tous
+        // les contours des pièces. Dans l'aperçu : la couleur du fond.
+        if (config.rosaceClearGlass && guide is RosaceGuide) {
+            targetDrawer.isolated {
+                shadeStyle = null
+                stroke = null
+                if (transparentBackground) {
+                    drawStyle.blendMode = BlendMode.REPLACE
+                    val c = config.leadStyle.color
+                    fill = ColorRGBa(c.r, c.g, c.b, 0.0)
+                } else {
+                    fill = config.backgroundColor
+                }
+                contour(contour)
+            }
+            return@forEachIndexed
+        }
 
         val cellCenter = polygonCentroid(cell)
         val bounds = contour.bounds
@@ -234,15 +344,108 @@ fun renderVitrail(
             )
         }
 
-        targetDrawer.fill = cellColors[index]
+        // Phase 22 : réglage du rôle de la pièce (couleur, texture, épaisseur).
+        val tweak = if (guide is RosaceGuide && config.pieceTweaks.isNotEmpty())
+            guide.unitPieces.getOrNull(index)?.role?.let { config.pieceTweaks[it] }
+                ?.takeIf { t -> t.maxLightness == null || OkLab.toLab(cellColors[index])[0] <= t.maxLightness }
+        else null
+        val pieceColor = tweak?.color?.let { ColorRGBa.fromHex(it) } ?: cellColors[index]
+
+        targetDrawer.fill = pieceColor
         targetDrawer.stroke = null
 
         glassShadeStyle.parameter("cellCenter", normalizedCellCenter)
         glassShadeStyle.parameter("canvasPosition", canvasPosition)
         glassShadeStyle.parameter("opalescence", materialVariation[index])
+        // Verre noir traversé par la lumière : transmission de la pièce,
+        // selon la clarté de son verre (darkGlassFactor).
+        config.darkGlassTransmission?.let { tMax ->
+            val v = config.transmissionVariation?.let { 1.0 + it * pieceHash(index) } ?: 1.0
+            glassShadeStyle.parameter("transmission", maxOf(1.0, darkGlassFactor(pieceColor, tMax) * v))
+        }
+        // Texture adoucie pour certaines pièces de rosace (disque « hostie »
+        // de C2) ; 1.0 partout ailleurs : rendu inchangé.
+        glassShadeStyle.parameter("textureScale", tweak?.textureScale ?:
+        if (c2Data != null) c2Data.textureScales[index]
+        else if (guide is RosaceGuide) guide.unitPieces.getOrNull(index)?.let { rosaceTextureScale(it.role) } ?: 1.0 else 1.0)
+        // C2 noire, reflet continu des pétales : position de la pièce dans la
+        // rosace (unités ; u vers le haut, v vers la droite), voir C2Noir.kt.
+        if (c2Shade != null && c2Data != null && guide is RosaceGuide) {
+            val cx = guide.center.x + frameOffset.x
+            val cy = guide.center.y + frameOffset.y
+            val rr = guide.radius
+            glassShadeStyle.parameter("shadeGroup", c2Data.shadeGroups[index])
+            if (!C2_SHADE_FLIP_Y) {
+                glassShadeStyle.parameter("modelOrigin", Vector2((cy - bounds.corner.y) / rr, (bounds.corner.x - cx) / rr))
+                glassShadeStyle.parameter("modelSize", Vector2(bounds.height / rr, bounds.width / rr))
+            } else {
+                glassShadeStyle.parameter("modelOrigin", Vector2((cy - bounds.corner.y - bounds.height) / rr, (bounds.corner.x - cx) / rr))
+                glassShadeStyle.parameter("modelSize", Vector2(-bounds.height / rr, bounds.width / rr))
+            }
+        }
+        // Modèle optique (phase 18) : position continue sur le canevas et
+        // variation d'épaisseur propre à la pièce.
+        config.glassOptics?.let { o ->
+            glassShadeStyle.parameter("canvasOrigin", Vector2(bounds.corner.x / canvasWidth, bounds.corner.y / canvasHeight))
+            glassShadeStyle.parameter("canvasSize", Vector2(bounds.width / canvasWidth, bounds.height / canvasHeight))
+            val role = (guide as? RosaceGuide)?.unitPieces?.getOrNull(index)?.role ?: ""
+            val center = if (guide is RosaceGuide) Vector2(guide.center.x + frameOffset.x, guide.center.y + frameOffset.y)
+            else Vector2(canvasWidth / 2.0, canvasHeight / 2.0)
+            val radial = polygonCentroid(cells[index]) - center
+            val (dir0, amp) = glassThickness(role, radial, index)
+            val dir = if (tweak?.thicknessInward == true && radial.length > 1e-6) radial.normalized * -1.0 else dir0
+            glassShadeStyle.parameter("thickDir", dir)
+            glassShadeStyle.parameter("thickAmp", if (o.thickness) (amp * o.thicknessScale * (tweak?.thicknessScale ?: 1.0)).coerceAtMost(0.6) else 0.0)
+            if (o.clearGlassDarkenOnly) glassShadeStyle.parameter("thickLift", thicknessLift(pieceColor))
+        }
         targetDrawer.shadeStyle = glassShadeStyle
 
         targetDrawer.contour(contour)
+    } }
+
+    // Diffusion de la lumière dans le verre (phase 19, GlassDiffusion.kt) :
+    // le verre est dessiné dans une image à part, diffusé pièce par pièce,
+    // puis posé sur la pierre. Sans diffusion : dessin direct, comme avant.
+    val diffusion = config.glassDiffusion?.takeIf { !config.rosaceClearGlass }
+    if (diffusion == null) {
+        drawGlassPieces()
+    } else {
+        val layers = GlassDiffusionLayers(Math.round(canvasWidth).toInt(), Math.round(canvasHeight).toInt())
+        var leftFill: ColorRGBa? = null
+        var leftStroke: ColorRGBa? = null
+        targetDrawer.isolatedWithTarget(layers.glass) {
+            ortho(layers.glass)
+            clear(ColorRGBa.TRANSPARENT)
+            drawGlassPieces()
+            leftFill = fill
+            leftStroke = stroke
+        }
+        targetDrawer.isolatedWithTarget(layers.ids) {
+            ortho(layers.ids)
+            clear(ColorRGBa.TRANSPARENT)
+            shadeStyle = null
+            stroke = null
+            drawnCells.forEachIndexed { drawnIndex, cell ->
+                if (cell.size >= 3) {
+                    fill = glassPieceIdColor(drawnIndex)
+                    contour(if (guide is RosaceGuide) straightContour(cell)
+                    else createCurvedContour(cell, edgeCurveCache, scaledCurvatureAmount))
+                }
+            }
+        }
+        layers.diffuseAndDraw(targetDrawer, diffusion, diffusion.radius * canvasWidth)
+        // Même état du dessin qu'après le dessin direct (les plombs fins sont
+        // tracés ensuite avec cet état).
+        targetDrawer.fill = leftFill
+        targetDrawer.stroke = leftStroke
+        targetDrawer.shadeStyle = glassShadeStyle
+    }
+
+    // Phase 22 : grisaille sur le verre givré des pétales de rosace, entre le
+    // verre et le plomb (RosaceDetails.kt).
+    if (config.petalGrisaille != null && guide is RosaceGuide && bayGeometry == null && !config.rosaceClearGlass) {
+        drawRosacePetalGrisaille(targetDrawer, guide, cells, cellColors, frameOffset, leadStyle.width, config.petalGrisaille)
+        targetDrawer.shadeStyle = glassShadeStyle
     }
 
     // Détails peints à la grisaille (famille végétale : barbes du blé,
@@ -256,17 +459,41 @@ fun renderVitrail(
     // hiérarchie, RosaceGuide.cellLeadFactor ; les plus épais suivent.)
     // Leur couleur peut aussi différer (RosacePalette.leadFine : « contour
     // décoratif » plus clair que les plombs de structure).
-    val cellLeadStyle = if (guide is RosaceGuide && guide.cellLeadFactor != 1.0)
+    val baseFine = if (guide is RosaceGuide) maxOf(guide.cellLeadFactor, config.minFineLeadFactor ?: 0.0) else 1.0
+    val jointFactor = config.fineLeadJointFactor ?: baseFine
+    val nervureFactor = config.fineLeadNervureFactor ?: baseFine
+    val fineLeadFactor = if (config.fineLeadJointFactor != null || config.fineLeadNervureFactor != null)
+        minOf(jointFactor, nervureFactor) else baseFine
+    val cellLeadStyle = if (guide is RosaceGuide && fineLeadFactor != 1.0)
         leadStyle.copy(
-            width = leadStyle.width * guide.cellLeadFactor,
-            color = config.rosacePalette.leadFine ?: leadStyle.color
+            width = leadStyle.width * fineLeadFactor,
+            color = if (c2Variant != null) leadStyle.color else config.rosacePalette.leadFine ?: leadStyle.color
         ) else leadStyle
     config.leadSystem.draw(targetDrawer, drawnCells, edgeCurveCache, scaledCurvatureAmount, cellLeadStyle)
 
+    // Rosace C2 : plombs fins plus épais pour une catégorie (séparations ou
+    // nervures), redessinés par-dessus, sous les plombs structurels.
+    if (guide is RosaceGuide && bayGeometry == null) {
+        if (jointFactor > fineLeadFactor)
+            drawRosaceGroupFineLeads(targetDrawer, guide, cells, C2_JOINT_ROLES, cellLeadStyle.color, leadStyle.width * jointFactor)
+        if (nervureFactor > fineLeadFactor)
+            drawRosaceGroupFineLeads(targetDrawer, guide, cells, C2_NERVURE_ROLES, cellLeadStyle.color, leadStyle.width * nervureFactor)
+    }
+
     // Rosace : plombs épais (dessins B et C), puis contour extérieur.
     if (guide is RosaceGuide && bayGeometry == null) {
-        drawRosaceLeadLines(targetDrawer, guide, frameOffset, leadStyle.color, leadStyle.width)
+        drawRosaceLeadLines(targetDrawer, guide, frameOffset, leadStyle.color, leadStyle.width, config.minFineLeadFactor ?: 0.0)
+        // C2 noire (Onyx et nacre) : plombs ENTRE deux pièces du fond dans leur propre couleur.
+        c2Variant?.fieldLeadColor?.let { fc ->
+            drawC2FieldLeads(targetDrawer, guide, cells, frameOffset, ColorRGBa.fromHex(fc),
+                leadStyle.width * fineLeadFactor, leadStyle.width)
+        }
         drawRosaceRim(targetDrawer, guide, frameOffset, leadStyle.color, leadStyle.width)
+        // Phase 22 : soudures aux croisements des plombs (RosaceDetails.kt).
+        config.leadJoints?.let { j ->
+            drawRosaceLeadJoints(targetDrawer, guide, cells, frameOffset, leadStyle.color,
+                leadStyle.width, leadStyle.width * fineLeadFactor, j)
+        }
     }
 
     // Baie : grand plomb du pourtour et barlotières, par-dessus tout.
@@ -425,7 +652,8 @@ private fun computeVitrail(
         )
         // Rosace : aucun tirage (couleurs fixées par le type et la
         // position de chaque pièce, pour une symétrie stricte).
-        is RosaceGuide -> applyRosaceColors(
+        is RosaceGuide -> if (config.c2Noir != null) applyC2NoirColors(guide, cellColors, config.c2Noir)
+        else applyRosaceColors(
             guide = guide,
             cellColors = cellColors,
             scheme = config.rosaceScheme,
@@ -453,4 +681,57 @@ private fun computeVitrail(
     }
 
     return GeneratedVitrail(guide, cells, cellColors, materialVariation)
+}
+
+/** Facteur de transmission d'une pièce (VitrailConfig.darkGlassTransmission) :
+ *  tMax pour un verre de clarté OKLab ≤ 0,20, 1,0 pour un verre de clarté
+ *  ≥ 0,55, linéaire entre les deux. */
+fun darkGlassFactor(color: ColorRGBa, tMax: Double): Double {
+    val l = OkLab.toLab(color)[0]
+    val k = ((0.55 - l) / (0.55 - 0.20)).coerceIn(0.0, 1.0)
+    return 1.0 + (tMax - 1.0) * k
+}
+
+
+/** Phase 18 ter : part de l'éclaircissement du côté mince conservée selon la
+ *  clarté OKLab du verre : 1,0 (inchangé) jusqu'à 0,60, 0,0 (l'épaisseur ne
+ *  fait qu'assombrir) à partir de 0,85, linéaire entre les deux. */
+fun thicknessLift(color: ColorRGBa): Double {
+    val l = OkLab.toLab(color)[0]
+    return ((0.85 - l) / (0.85 - 0.60)).coerceIn(0.0, 1.0)
+}
+
+
+/** Valeur déterministe dans [-1, 1] pour la pièce d'indice i (aucun tirage
+ *  aléatoire : l'ordre des tirages de renderVitrail() reste inchangé). */
+fun pieceHash(i: Int): Double {
+    var h = (i.toLong() * 2654435761L + 0x9E3779B9L) and 0xFFFFFFFFL
+    h = (h xor (h ushr 15)) * 0x2C1B3C6DL and 0xFFFFFFFFL
+    h = h xor (h ushr 12)
+    return (h % 2001L) / 1000.0 - 1.0
+}
+
+
+/** Variation d'épaisseur d'une pièce (modèle optique, phase 18) : direction
+ *  (coordonnées de la pièce, y vers le bas) et amplitude (part de lumière
+ *  retirée du côté le plus épais, ajoutée du côté le plus mince), selon le
+ *  rôle de la pièce, déterministe (pieceHash, aucun tirage aléatoire).
+ *   - fond, bordure : direction libre, amplitude 0,10 à 0,20 ;
+ *   - pétales, flammes, calice, pointes : le long de l'axe du pétale (±25°),
+ *     0,07 à 0,14 ;
+ *   - croix : le long du bras (±15°), 0,05 à 0,10 ;
+ *   - hostie, couronne : 0,03. */
+fun glassThickness(role: String, radial: Vector2, index: Int): Pair<Vector2, Double> {
+    val h1 = pieceHash(index); val h2 = pieceHash(index + 7919); val h3 = pieceHash(index + 104729)
+    val axis = if (radial.length > 1e-6) Math.atan2(radial.y, radial.x) else 0.0
+    val base = role.substringBefore('@')
+    val (angle, amp) = when {
+        role == "out0" || role == "out1@fieldOuter" || role == "deepBig" -> Pair(Math.PI * h1, 0.15 + 0.05 * h2)
+        base == "mid1" || base == "mid0" || role == "cen1@calyx" || role == "gold@petalTip" ->
+            Pair(axis + Math.toRadians(25.0) * h1, 0.105 + 0.035 * h2)
+        role == "cross" -> Pair(axis + Math.toRadians(15.0) * h1, 0.075 + 0.025 * h2)
+        else -> Pair(Math.PI * h1, 0.03)
+    }
+    val sign = if (h3 < 0) -1.0 else 1.0
+    return Pair(Vector2(Math.cos(angle) * sign, Math.sin(angle) * sign), amp)
 }
